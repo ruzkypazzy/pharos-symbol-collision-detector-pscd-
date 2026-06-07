@@ -1,0 +1,20 @@
+{
+  "mainnet": {
+    "name": "Pharos Pacific Ocean Mainnet",
+    "chainId": 1672,
+    "native": "PROS",
+    "rpcUrl": "https://rpc.pharos.xyz",
+    "explorer": "https://www.pharosscan.xyz",
+    "blockTimeSec": 2,
+    "notes": "Default network. Live as of June 2026."
+  },
+  "testnet": {
+    "name": "Pharos Atlantic Testnet",
+    "chainId": 688689,
+    "native": "PHRS",
+    "rpcUrl": "https://atlantic.dplabs-internal.com",
+    "explorer": "https://atlantic.pharosscan.xyz",
+    "blockTimeSec": 2,
+    "notes": "Testnet — may have aggressive rate limits. Not recommended for production use."
+  }
+}
