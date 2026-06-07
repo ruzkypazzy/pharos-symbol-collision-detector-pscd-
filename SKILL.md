@@ -44,11 +44,29 @@ cd Pharos-Symbol-Collision-Detector-PSCD-
 # Bounded fast scan (~5s, last 5,000 blocks of mainnet)
 bash scripts/check.sh SYMBOL --max-blocks 5000
 
+# Custom block range — "check from block X to block Y"
+bash scripts/check.sh SYMBOL --from-block 9000000 --to-block 9050000
+
 # Full mainnet scan (~3 minutes, scans all 9.6M blocks)
 bash scripts/check.sh SYMBOL
 
 # Demo: check USDC
 bash scripts/check_demo.sh
+```
+
+### Custom block range (from-block / to-block)
+
+Both the bash wrapper and the Python entry point accept explicit `--from-block N` and `--to-block N`. The wrapper validates that `--from-block <= --to-block` and that all numeric flags are non-negative integers. Pair with `--step` (default 1000) to control RPC call density, and `--workers` (default 6) for parallel symbol lookup.
+
+```bash
+# Last week's worth of blocks on Pharos (Pharos is 2s blocks → 302,400 blocks/week)
+bash scripts/check.sh SKP --from-block 9300000 --to-block 9602400
+
+# From a specific deployment height to today
+bash scripts/check.sh SKP --from-block 8000000
+
+# Pin a fixed window for reproducible audits
+bash scripts/check.sh USDC --from-block 9500000 --to-block 9550000 --format json
 ```
 
 ### As JSON for programmatic consumption
@@ -120,6 +138,7 @@ Always include the `from_block` and `to_block` in the response so the user knows
 |---|---|---|---|
 | `fast` (default for demo) | last 5,000 blocks | ~5s | interactive demos |
 | `bounded` | `--max-blocks N` | N/1000s | pre-launch checks |
+| `custom` | `--from-block X --to-block Y` | (Y-X)/1000s | reproducible audits, fixed windows, "from block X to block Y" requests |
 | `full` | entire chain | ~3 min | first-time audit |
 
 For production use, always run with `--max-blocks 100000` or larger to catch recently-deployed duplicates.
