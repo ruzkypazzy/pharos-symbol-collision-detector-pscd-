@@ -166,6 +166,50 @@ bash scripts/check.sh SKP --format json
 
 The bottleneck is `eth_getLogs` round-trips (1 RPC call per 1000 blocks). The candidate-fetch step is parallel and fast.
 
+
+## Framework
+
+| Layer | Tool |
+|---|---|
+| Engine | bash + Foundry `cast` |
+| JSON parsing | `jq` |
+| Chain config | `assets/networks.json` (Pharos Skill Engine schema) |
+| Skill loader | Pharos Agent Center / Claude Code / Codex / OpenClaw |
+
+The skill is a thin bash wrapper that calls `cast` for every RPC read. No contracts are deployed, no private keys required.
+
+## Dependencies
+
+| Dependency | Required? | Notes |
+|---|---|---|
+| `cast` (Foundry) | **Yes** | `curl -L https://foundry.paradigm.xyz \| bash && foundryup` |
+| `jq` | **Yes** | `apt install -y jq` or `brew install jq` |
+| `bash` ≥ 4.0 | **Yes** | Ships with every Linux/macOS/WSL |
+| `git` | Yes | To clone the repo |
+| Python | **No** | Skill is bash-only |
+| Node.js | **No** | Skill is bash-only |
+
+## Tests
+
+```bash
+bash tests/test_check_smoke.sh
+```
+
+The test suite covers the engine's heuristics, the JSON output schema, and (when run with `cast` installed) a live RPC smoke test against Pharos Pacific Mainnet.
+
+## Repository layout
+
+```
+.
+├── README.md                  # this file
+├── SKILL.md                   # Agent-side description (loaded by Claude/Codex/etc.)
+├── scripts/
+│   └── check.sh          # bash + cast engine — the entire skill
+├── assets/
+│   └── networks.json          # Pharos Skill Engine network config
+└── tests/
+    └── test_*.sh              # bash smoke test
+```
 ## Roadmap
 
 - [ ] Add creator-address lookup via the contract creation tx
