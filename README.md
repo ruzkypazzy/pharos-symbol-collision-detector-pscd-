@@ -216,3 +216,17 @@ The test suite covers the engine's heuristics, the JSON output schema, and (when
 - [ ] Add `eth_getCode` filter to skip non-ERC-20 contracts (some NFTs and staking pools emit Transfer but have no `symbol()`)
 - [ ] Atlantic testnet support (RPC already wired)
 - [ ] Live demo on GitHub Pages
+
+## Networks
+
+| Network | Chain ID | RPC | Native |
+|---|---:|---|---|
+| Pharos Pacific Mainnet | 1672 | `https://rpc.pharos.xyz` | PROS |
+| Pharos Atlantic Testnet | 688689 | `https://atlantic.dplabs-internal.com` | PHRS |
+
+Default is **mainnet**; pass `--network testnet` to switch.
+
+## License
+
+MIT — see [LICENSE](./LICENSE).
+
