@@ -7,12 +7,12 @@ description: |
   returns CLEAR (no match) or COLLISION (with addresses, names, decimals, and
   explorer links). Operates as both a CLI tool and an in-agent tool callable by
   Claude Code, Codex, or OpenClaw via this SKILL.md.
-version: 1.1.0
+version: 2.0.0
 author: ruzkypazzy
 requires: read
-bins: [python3]
+bins: [bash, cast, jq]
 network: pharos
-tags: [pharos, security, erc20, tokens, symbol, collision, scam-detection, mainnet, testnet]
+tags: [pharos, security, erc20, tokens, symbol, collision, scam-detection, mainnet, testnet, foundry]
 agents: [claude, codex, gemini, openclaw]
 ---
 
