@@ -7,6 +7,13 @@ description: |
   returns CLEAR (no match) or COLLISION (with addresses, names, decimals, and
   explorer links). Operates as both a CLI tool and an in-agent tool callable by
   Claude Code, Codex, or OpenClaw via this SKILL.md.
+version: 1.1.0
+author: ruzkypazzy
+requires: read
+bins: [python3]
+network: pharos
+tags: [pharos, security, erc20, tokens, symbol, collision, scam-detection, mainnet, testnet]
+agents: [claude, codex, gemini, openclaw]
 ---
 
 # Pharos Symbol Collision Detector (PSCD)
@@ -180,3 +187,67 @@ Or via OpenClaw:
 ```bash
 npx skills add ruzkypazzy/Pharos-Symbol-Collision-Detector-PSCD-
 ```
+
+## Prerequisites
+
+```bash
+# Python 3.10+ is required
+python3 --version
+```
+
+The skill uses only the Python standard library (`urllib.request`,
+`json`, `concurrent.futures`). No third-party packages, no Foundry,
+no `pip install` step.
+
+The skill is **read-only** — no private key is required or accepted.
+
+## Network Configuration
+
+Network RPC URLs and chain IDs are sourced from
+`assets/networks.json` (canonical Pharos Skill Engine schema). To
+add a new network, append a new object to the `networks` array and
+update `defaultNetwork` if needed.
+
+## Capability Index
+
+| User Need | Capability | Detailed Instructions |
+|---|---|---|
+| "Is the symbol USDC taken on Pharos?" | Scan a block range for matching `symbol()` returns | Run `python3 -m pscd --symbol USDC --from-block 0 --to-block latest --rpc-url https://rpc.pharos.xyz`; the skill emits CLEAR or COLLISION with per-match detail |
+| "Check Cyrillic homoglyph spoofs" | Unicode-normalize the symbol before comparison | PSCD applies NFKC normalization + zero-width-space stripping; matches `USDC` against `USDС` (Cyrillic) and `U​SDC` (zero-width space) |
+| "Custom block range scan" | `--from-block` / `--to-block` flags | Default scans all blocks on the chain; bounded scans use the public Pharos RPC's `eth_getLogs` with 1,000-block batches and 6 parallel `eth_call` workers |
+| "Per-collision trading card" | Markdown report per match | Output is a "trading card" with the suspect address, deployer, deployment block, on-chain symbol, and a one-line verdict (`COLLISION — likely scam` / `COLLISION — verify contract source`) |
+| "False-positive check (legit bridge)" | Cross-reference with bridge registry | PSCD flags known-bridge addresses differently from unknown deployers; the verdict line in the trading card reflects the bridge status |
+
+## General Error Handling
+
+| Error Scenario | CLI Error Signature | Handling |
+|---|---|---|
+| Block range too large for `eth_getLogs` | Pharos RPC returns `param error; The block range is too large` | PSCD auto-falls back to 1,000-block batches with `eth_getBlockByNumber` + internal-tx walking; the user does not need to retry |
+| RPC rate-limited (HTTP 429) | Backoff response from RPC | Built-in exponential backoff (0.4s, 0.8s, 1.6s, 3.2s) with 4 retry attempts |
+| Symbol contains non-printable chars | Symbol field contains null bytes / zero-width space | Symbol is NFKC-normalized + zero-width-stripped before comparison; the comparison still works on the cleaned form |
+| Network not in networks.json | `--rpc-url` not recognized | Exit with a list of valid networks; default to atlantic-testnet |
+| Empty result (no matches) | `verdict: CLEAR` | Normal case — emit the "no match found" report, no error |
+
+## Security Reminders
+
+- **Private Key Protection** — the skill is read-only and never
+  accepts a private key. Do not paste keys into chat.
+- **Network Confirmation** — before any future write-skill
+  integration, confirm the network with the user.
+- **No External API** — the skill does not call any third-party
+  service. All data is fetched directly from the Pharos RPC.
+
+## Write Operation Pre-checks
+
+This skill is **read-only** and never submits a transaction, so the
+full 4-step write pre-check is not applicable. If a future version
+adds a "submit symbol claim" path, the pre-checks must include:
+
+1. **Private Key Check** — `--private-key` / `$PRIVATE_KEY` must be
+   set; warn if the key has zero balance.
+2. **Derive Public Address** — `cast wallet address`; confirm the
+   key is for the intended network.
+3. **Network Confirmation** — prompt the user with "You are about
+   to write to Pacific mainnet. Continue? (y/N)".
+4. **Automatic Balance Check** — `cast balance`; if below the
+   operation cost + gas, abort with a clear error.
