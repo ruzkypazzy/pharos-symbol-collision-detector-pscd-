@@ -28,7 +28,7 @@
 #                              [--step N] [--format md|json|txt]
 #                              [--quiet] [--demo] [--help]
 
-set -euo pipefail
+set -uo pipefail
 
 # ---- Foundry required ----
 if ! command -v cast >/dev/null 2>&1; then
@@ -205,7 +205,7 @@ ADDR_FILE="$TEMP/addresses.txt"
 cat "${LOG_FILES[@]}" \
   | grep -oE '"address":"0x[a-fA-F0-9]{40}"' \
   | sed 's/.*"0x/0x/' | sed 's/"//' \
-  | sort -u > "$ADDR_FILE"
+  | sort -u > "$ADDR_FILE" 2>/dev/null || true
 UNIQ_COUNT=$(wc -l < "$ADDR_FILE" | tr -d ' ')
 log "  found $UNIQ_COUNT unique token addresses"
 log ""
