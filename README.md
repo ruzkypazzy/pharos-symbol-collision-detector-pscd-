@@ -28,9 +28,9 @@ Typical agent-side flow:
 ```text
 User -> Agent: "Score wallet 0xabc... for MEV exposure on Pharos"
 Agent -> looks up SKILL.md for Pharos Symbol Collision Detector
-Agent -> picks the right flag combo: --wallet 0xabc... --blocks 5000 --format json
-Agent -> runs: bash scripts/detect.sh --wallet 0xabc... --blocks 5000 --format json
-Agent -> reads the JSON from stdout, presents it to the user in a friendly form
+Agent -> picks the right flag combo: --SYMBOL 0xabc... 
+Agent -> runs: bash scripts/check.sh USDC
+Agent -> reads the output, presents it to the user in a friendly form
 ```
 
 The script prints structured output to stdout and human-readable progress to stderr, so the agent can parse the stdout cleanly (with `jq`) without being polluted by progress messages.
@@ -120,9 +120,9 @@ The Pharos Agent Center is the official agent runtime for the Pharos network. It
 
 3. **Invoke from the agent's chat UI** (or via the Agent Center's CLI / API):
    ```text
-   User: "Audit this Safe: 0xabc..."
+   User: "Is symbol USDC already used on Pharos"
    Agent Center: loads Pharos Symbol Collision Detector, runs:
-     bash ~/.pharos/agent-center/skills/Pharos-Symbol-Collision-Detector-PSCD-/scripts/check.sh --safe 0xabc... --network mainnet
+     bash ~/.pharos/agent-center/skills/Pharos-Symbol-Collision-Detector-PSCD-/scripts/check.sh USDC --network mainnet
    ```
 
 ### Path B — `npx skills add` (for Claude Code, Cursor, Codex, generic MCP agents)
