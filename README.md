@@ -10,7 +10,7 @@
 
 ## What it is
 
-This is a **skill built for the Pharos network** — a self-contained, deterministic bash script that runs on top of the [Pharos](https://pharos.network) EVM chains. It is **not** an AI agent itself, not a chatbot, and not a Python service. It is a single bash script that:
+This is a **skill built for the Pharos network** — a self-contained, deterministic bash script that runs on top of the [Pharos](https://pharos.network) EVM chains. It is **not** an AI agent itself, and not a chatbot. It is a single bash script that:
 
 - takes input from the caller via CLI flags,
 - reads live on-chain data from Pharos via `cast` (Foundry),
@@ -167,11 +167,9 @@ The agent should read the script's `--help` output to discover all available fla
 |---|---|---|
 | Engine | **bash 4+** | Script host (single file per skill) |
 | RPC client | **Foundry / cast** | All chain reads — block, tx, receipt, eth_call, eth_getLogs |
-| Chain config | **JSON** (`assets/networks.json`) | Network endpoints + chain IDs (no Python parser) |
+| Chain config | **JSON** (`assets/networks.json`) | Network endpoints + chain IDs |
 | Data format | **JSON** | Cast's native output; jq used only for pretty-printing |
 | Runtime | Any POSIX shell, Foundry 1.0+ | Tested on Linux + macOS |
-
-No Python. No npm. No external dependencies beyond Foundry + jq.
 
 ## Dependencies
 
@@ -219,16 +217,3 @@ Pharos-Symbol-Collision-Detector-PSCD-/
 MIT — see `LICENSE`.
 
 ---
-
-## Note to the reviewer
-
-The entire skill is a single bash script (`scripts/check.sh`) plus a chain config file (`assets/networks.json`). No Python, no Node.js, no other runtime needed — only Foundry (`cast`) and `bash`. The script walks recent Pharos mainnet blocks in batches of 1000, uses `cast rpc eth_getLogs` filtered to Transfer-from-zero events to discover ERC-20 token deployments, then queries each unique token contract's `symbol()` / `name()` / `decimals()` via `cast call`, and compares the user-supplied symbol (case-insensitive, whitespace-stripped) against every on-chain symbol. Returns one of three verdicts: CLEAR (no token uses the symbol), COLLISION (one or more tokens use it, with addresses, names, decimals, and explorer links), or EMPTY (no symbol provided). The smoke test (`tests/test_check_smoke.sh`) runs offline and verifies the help text, arg parser, error paths, and the from>to range validation. The full mainnet scan (`--max-blocks 50000`) takes 1-2 minutes over the public RPC. Please verify by running `bash scripts/check.sh USDC --max-blocks 50000` after `git clone` and `foundryup`.
-
-If anything in the build or run fails, the most likely cause is one of:
-
-- **Foundry not installed** — run `curl -L https://foundry.paradigm.xyz | bash && foundryup`, then `exec $SHELL` to reload the shell. Verify with `cast --version`.
-- **jq missing** — only needed for `--format json`. Install via `brew install jq` / `apt install jq` / `apk add jq`.
-- **The Pharos public RPC is rate-limited or slow** — re-run with a smaller `--max-blocks` or `--blocks` value, or pass `--rpc-url https://your-own-rpc.example.com` to point at a private endpoint.
-- **The public mainnet RPC returns null for `eth_getTransactionByHash`** — this is a known limitation of the Pharos public RPC node (it serves receipts but not full transaction state for some hashes). Use a mainnet block explorer to find a verified hash, or pass `--rpc-url` to a private node.
-
-Verified working on Contabo VPS (Ubuntu 24.04, bash 5.x, Foundry v1.7.1) and macOS (Sonoma, bash 3.2 via brew, Foundry v1.7.1).
