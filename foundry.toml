@@ -1,6 +1,19 @@
 [profile.default]
-src = "scripts"
+src = "assets/contracts"
 out = "out"
+libs = ["lib"]
+test = "tests"
 solc = "0.8.24"
 optimizer = true
 optimizer_runs = 200
+via_ir = false
+fs_permissions = [{ access = "read", path = "./assets" }]
+
+[fmt]
+line_length = 100
+tab_width = 4
+quote_style = "double"
+
+[rpc_endpoints]
+atlantic-testnet = "https://atlantic.dplabs-internal.com"
+mainnet = "https://rpc.pharos.xyz"

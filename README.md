@@ -1,219 +1,219 @@
-# Pharos Symbol Collision Detector
+# Pharos Symbol Collision Detector (PSCD)
 
-> Is your token's symbol already taken? Scans Pharos mainnet for ERC-20 mints that share a candidate symbol.
+> Two surfaces, one Skill. Scans Pharos for ERC-20 symbol collisions and
+> lets developers file refundable on-chain claims before they launch.
 
 [![foundry](https://img.shields.io/badge/built%20with-Foundry-orange)]()
-[![bash](https://img.shields.io/badge/script-bash-blue)]()
+[![solidity](https://img.shields.io/badge/contract-Solidity%200.8.24-blue)]()
 [![license](https://img.shields.io/badge/license-MIT-green)]()
-[![pharos](https://img.shields.io/badge/network-Pharos-blueviolet)]()
+[![pharos](https://img.shields.io/badge/network-Pharos%20mainnet%20%2B%20testnet-blueviolet)]()
 [![ai-agent](https://img.shields.io/badge/callable%20by-AI%20agent-purple)]()
 
-## What it is
+## What is this?
 
-This is a **skill built for the Pharos network** — a self-contained, deterministic bash script that runs on top of the [Pharos](https://pharos.network) EVM chains. It is **not** an AI agent itself, and not a chatbot. It is a single bash script that:
+PSCD is a Pharos Skill designed to be packaged as a **Service Agent** on
+[Anvita Flow](https://flow.anvita.xyz). It protects ERC-20 token developers
+from launching with a symbol that's already taken, by combining:
 
-- takes input from the caller via CLI flags,
-- reads live on-chain data from Pharos via `cast` (Foundry),
-- runs its own scoring/heuristic logic in pure bash,
-- prints a structured report (text, JSON, or markdown) to stdout.
+1. **Off-chain scanner** — walks Pharos Pacific mainnet via `cast`,
+   finds ERC-20 mints via Transfer-from-zero events, and reports which
+   tokens share a candidate symbol. Read-only, no funds at risk.
+2. **On-chain registry** — a `SymbolRegistry` Solidity contract (same source
+   deployed to both Pacific mainnet and Atlantic testnet) that lets a
+   developer file a refundable PHRS/PROS deposit claim. Anyone can query
+   active claims; the original claimer can release and get the deposit back.
 
-Scans Pharos Pacific mainnet (chain 1672) for ERC-20 tokens that share a candidate symbol. Returns CLEAR, COLLISION, or EMPTY. Uses Transfer-from-zero mint events to discover token deployments, then queries each token's symbol() / name() / decimals() via eth_call.
+Together they cover both **reality** (existing ERC-20s) and **intent**
+(filed claims).
 
-## Use it from an AI agent
+## Architecture
 
-This skill is designed to be **called by an AI agent** (a Claude Code / Codex / Cursor agent, the Pharos Agent Center, or any custom LLM agent). The agent reads `SKILL.md` to discover the skill's flags, fills them in based on the user's request, and runs the bash script in its sandbox. The agent's job is just to translate "score this wallet for MEV risk" into `bash scripts/detect.sh --wallet 0x... --blocks 5000`.
-
-Typical agent-side flow:
-
-```text
-User -> Agent: "Score wallet 0xabc... for MEV exposure on Pharos"
-Agent -> looks up SKILL.md for Pharos Symbol Collision Detector
-Agent -> picks the right flag combo: --SYMBOL 0xabc... 
-Agent -> runs: bash scripts/check.sh USDC
-Agent -> reads the output, presents it to the user in a friendly form
+```
+                   ┌─────────────────────────────────────────┐
+                   │       PSCD Service Agent                │
+                   │       (Anvita Flow hosted)              │
+                   └────────────────────┬────────────────────┘
+                                        │
+              ┌─────────────────────────┴─────────────────────────┐
+              │                                                    │
+              ▼                                                    ▼
+   ┌────────────────────────┐                      ┌──────────────────────────────┐
+   │ Off-chain scanner      │                      │ On-chain SymbolRegistry      │
+   │ scripts/check.sh       │                      │ SymbolRegistry.sol           │
+   │ (read-only, cast RPC)  │                      │ + scripts/register_*.sh     │
+   └──────────┬─────────────┘                      └──────────┬───────────────────┘
+              │                                                │
+              ▼                                                ▼
+      Pharos Pacific Mainnet                          Pharos Pacific Mainnet
+      chain 1672, RPC:                                + Pharos Atlantic Testnet
+      https://rpc.pharos.xyz                          chain 688689, RPC:
+                                                      https://atlantic.dplabs-internal.com
 ```
 
-The script prints structured output to stdout and human-readable progress to stderr, so the agent can parse the stdout cleanly (with `jq`) without being polluted by progress messages.
-
-## Install
-
-You need three things: **Foundry** (for `cast`), **jq** (for JSON pretty-printing), and **git** (to clone the repo).
+## Quick start (30 seconds, no API keys)
 
 ```bash
-# 1. Install Foundry (gives you cast, forge, anvil, chisel)
-curl -L https://foundry.paradigm.xyz | bash
-foundryup
-# Reload your shell so the new commands are on PATH:
-exec $SHELL
-cast --version   # should print 1.x or higher
-
-# 2. Install jq (optional — only needed for --format json pretty-printing)
-# macOS:   brew install jq
-# Ubuntu:  sudo apt-get install -y jq
-# Alpine:  apk add jq
-jq --version
-
-# 3. Clone this repo
 git clone https://github.com/ruzkypazzy/Pharos-Symbol-Collision-Detector-PSCD-.git
 cd Pharos-Symbol-Collision-Detector-PSCD-
-chmod +x scripts/*.sh tests/*.sh
-```
 
-## Quick test (30 seconds, no API keys needed)
+# Install Foundry if you don't have it
+curl -L https://foundry.paradigm.xyz | bash && foundryup
 
-```bash
+# Run the off-chain scanner demo (no deploy, no key needed)
 bash scripts/check.sh --demo
 ```
 
-The first time you run this, the script may take a few seconds to fetch block data over RPC. Subsequent runs are cached by the RPC provider.
-
-## Usage
+## Full installation
 
 ```bash
-# Check if 'SKP' is already used on mainnet (last 50,000 blocks)
-bash scripts/check.sh SKP --network mainnet --max-blocks 50000
+git clone https://github.com/ruzkypazzy/Pharos-Symbol-Collision-Detector-PSCD-.git
+cd Pharos-Symbol-Collision-Detector-PSCD-
+chmod +x scripts/*.sh
 
-# Scan a specific block range
-bash scripts/check.sh USDC --from-block 9000000 --to-block 9880000
+# 1. Foundry (mandatory)
+curl -L https://foundry.paradigm.xyz | bash && foundryup
 
-# Run the demo (last 50K blocks, no symbol)
+# 2. python3 (standard library only)
+python3 --version   # 3.10+ recommended
+
+# 3. jq (optional, for pretty JSON)
+# macOS:   brew install jq
+# Ubuntu:  sudo apt-get install -y jq
+
+# 4. Set up your wallet (only needed for on-chain ops)
+export PRIVATE_KEY=0xYourPrivateKeyHere
+export DEPLOYER=$(cast wallet address --private-key $PRIVATE_KEY)
+```
+
+## Deploy the on-chain registry
+
+```bash
+# Deploy to Atlantic testnet first (free PHRS)
+bash scripts/deploy_registry.sh --network testnet
+
+# Or deploy to Pacific mainnet (costs ~0.05 PROS)
+bash scripts/deploy_registry.sh --network mainnet
+
+# The script writes the address back to assets/networks.json
+# Verify on PharosScan after ~10 seconds
+```
+
+## Usage examples
+
+### Off-chain scanner
+
+```bash
+# Check if 'USDC' is taken (last 5K blocks, ~5s)
+bash scripts/check.sh USDC --max-blocks 5000
+
+# Wider scan, full JSON output
+bash scripts/check.sh SKP --max-blocks 100000 --format json
+
+# Custom block range
+bash scripts/check.sh SKP --from-block 9000000 --to-block 9050000
+
+# Run the demo (USDC, last 5K blocks, markdown)
 bash scripts/check.sh --demo
 ```
 
-### All flags
+### On-chain registry
+
+```bash
+# Check if 'SKP' is already claimed
+bash scripts/query_registry.sh SKP --network mainnet
+
+# File your own claim (deposit 0.001 PROS, refundable)
+bash scripts/register_symbol.sh SKP --network mainnet \
+  --project-uri "https://skp.example"
+
+# Audit recent claims
+bash scripts/registry_history.sh --network mainnet \
+  --from-block 11000000 --to-block 11500000
+
+# Release your claim and refund the deposit
+bash scripts/release_symbol.sh SKP --network mainnet
+```
+
+### Combined safety check (the recommended pattern)
+
+Before launching an ERC-20, run BOTH surfaces:
+
+```bash
+SYMBOL=USDC-PROJ
+
+# 1. Off-chain: is it already used?
+bash scripts/check.sh $SYMBOL --max-blocks 100000 --format json
+
+# 2. On-chain: has anyone filed a claim?
+bash scripts/query_registry.sh $SYMBOL --network mainnet
+
+# 3. (If both clear) Lock in your intent
+bash scripts/register_symbol.sh $SYMBOL --network mainnet \
+  --project-uri "https://myproject.example"
+```
+
+## As an AI agent (Service Agent on Anvita Flow)
+
+This Skill is designed to be hosted on [Anvita Flow](https://flow.anvita.xyz)
+as a Service Agent. The Steward Agent in Anvita On discovers PSCD via its
+`SKILL.md` Capability Index and invokes it like any other Service Agent.
+
+Example invocation from a Steward Agent:
 
 ```
-SYMBOL --network mainnet|testnet --max-blocks N --from-block N --to-block N --format md|json|txt --workers N
+User: "Is USDC safe to use on Pharos?"
+Steward Agent: invokes "Pharos Symbol Collision Detector" Service Agent
+  -> runs check.sh USDC --max-blocks 100000
+  -> runs query_registry.sh USDC --network mainnet
+Agent: "USDC is COLLISION on Pharos mainnet. There's an existing ERC-20
+  at 0xc879c018db60520f4355c26ed1a6d572cdac1815 using this symbol.
+  Choose a different ticker (e.g. USDC-PROJ, USDC2) before launching."
 ```
+
+See `SKILL.md` for the Capability Index and `references/` for the structured
+operation docs.
+
+## Scripts
+
+| Script | Purpose | Network | Needs key? |
+|---|---|---|---|
+| `check.sh` | Off-chain ERC-20 collision scanner | mainnet (default), testnet | No |
+| `deploy_registry.sh` | One-time: deploy SymbolRegistry contract | mainnet OR testnet | Yes |
+| `query_registry.sh` | Look up an on-chain claim | mainnet OR testnet | No |
+| `register_symbol.sh` | File a refundable claim | mainnet OR testnet | Yes |
+| `release_symbol.sh` | Cancel a claim, refund deposit | mainnet OR testnet | Yes |
+| `registry_history.sh` | Audit all claims in a block range | mainnet OR testnet | No |
 
 ## Networks
 
-The skill is built to run against the Pharos EVM chains. The chain config is stored in `assets/networks.json` and read at startup — no hardcoded URLs in the script.
+| Network | Chain ID | RPC | Default for | Deploy registry? |
+|---|---:|---|---|---|
+| Pacific mainnet | 1672 | `https://rpc.pharos.xyz` | Off-chain scanner | Yes |
+| Atlantic testnet | 688689 | `https://atlantic.dplabs-internal.com` | Testing | Yes (free) |
 
-| Network | Chain ID | RPC URL | Default |
-|---|---:|---|:---:|
-| mainnet (Pacific Ocean) | 1672 | `https://rpc.pharos.xyz` | ✓ |
-| atlantic-testnet | 688689 | `https://atlantic.dplabs-internal.com` |  |
-
-The script defaults to mainnet. Pass `--network testnet` to use the testnet instead. You can also override the RPC URL directly with `--rpc-url https://your-rpc.example.com`.
-
-## Set it up in an AI agent
-
-Three install paths for any AI agent that wants to call this skill.
-
-### Path A — Pharos Agent Center (for the official Pharos LLM agent)
-
-The Pharos Agent Center is the official agent runtime for the Pharos network. It reads `SKILL.md` from any skill repo to discover capabilities, dependencies, and required flags.
-
-1. **Copy the skill into the Agent Center's skills directory:**
-   ```bash
-   # After cloning this repo:
-   cp -r scripts assets SKILL.md README.md foundry.toml LICENSE \
-     ~/.pharos/agent-center/skills/Pharos-Symbol-Collision-Detector-PSCD-/
-   ```
-
-2. **Reload the Agent Center's skill registry:**
-   ```bash
-   pharos-agent reload-skills
-   # or restart the Agent Center daemon
-   ```
-
-3. **Invoke from the agent's chat UI** (or via the Agent Center's CLI / API):
-   ```text
-   User: "Is symbol USDC already used on Pharos"
-   Agent Center: loads Pharos Symbol Collision Detector, runs:
-     bash ~/.pharos/agent-center/skills/Pharos-Symbol-Collision-Detector-PSCD-/scripts/check.sh USDC --network mainnet
-   ```
-
-### Path B — `npx skills add` (for Claude Code, Cursor, Codex, generic MCP agents)
-
-```bash
-npx skills add https://github.com/ruzkypazzy/Pharos-Symbol-Collision-Detector-PSCD- --skill Pharos-Symbol-Collision-Detector-PSCD-
-```
-
-The agent's `skills` plugin will discover the SKILL.md, surface the skill in its tool list, and let the LLM pick the right flags when the user asks.
-
-### Path C — Manual copy (any agent that reads `~/.claude/skills/`)
-
-```bash
-mkdir -p ~/.claude/skills/Pharos-Symbol-Collision-Detector-PSCD-
-cp -r scripts assets SKILL.md README.md foundry.toml LICENSE ~/.claude/skills/Pharos-Symbol-Collision-Detector-PSCD-/
-```
-
-Restart the agent. It will pick up the new skill on next tool discovery.
-
-### Path D — Direct invocation (shell agents, cron jobs, CI pipelines)
-
-```bash
-bash scripts/check.sh --demo
-```
-
-No agent needed — just shell + Foundry.
-
-### What the agent says to invoke this skill
-
-| Caller says | Script invocation |
-|---|---|
-| Check if symbol `USDC` is already used on Pharos | `bash scripts/check.sh USDC --max-blocks 50000` |
-| Scan last 50K Pharos blocks for symbol `SKP` | `bash scripts/check.sh SKP --max-blocks 50000 --network mainnet` |
-| Run the symbol-collision demo | `bash scripts/check.sh --demo` |
-| "Run the demo" | `bash scripts/check.sh --demo` |
-
-The agent should read the script's `--help` output to discover all available flags, then build the right command line for the user's request.
-
-## Framework
-
-| Layer | Tech | Purpose |
-|---|---|---|
-| Engine | **bash 4+** | Script host (single file per skill) |
-| RPC client | **Foundry / cast** | All chain reads — block, tx, receipt, eth_call, eth_getLogs |
-| Chain config | **JSON** (`assets/networks.json`) | Network endpoints + chain IDs |
-| Data format | **JSON** | Cast's native output; jq used only for pretty-printing |
-| Runtime | Any POSIX shell, Foundry 1.0+ | Tested on Linux + macOS |
-
-## Dependencies
-
-**Required:**
-- [Foundry](https://getfoundry.sh) (gives you `cast`, `forge`, `anvil`)
-- `bash` 4+ (preinstalled on macOS, Ubuntu 20+, most Linux)
-
-**Optional:**
-- `jq` — only required if you pass `--format json` for pretty-printed output
-- `git` — only required if you're cloning the repo (you already have it)
+The same SymbolRegistry contract source compiles to a single bytecode and is
+deployed independently to each network. Addresses are stored under
+`networks[].contracts.SymbolRegistry` in `assets/networks.json`.
 
 ## Tests
 
-Each repo ships with a bash smoke test that verifies:
-1. `--help` works (no cast required)
-2. The script prints a useful error when args are missing
-3. The script prints a clear error when cast is not installed
-4. The script rejects unknown flags and bad network names
-5. (If applicable) `from-block > to-block` is detected and rejected
+### Smart contract (forge)
 
 ```bash
-bash tests/test_*.sh
+forge build       # compile
+forge test        # 14 unit tests
 ```
 
-The test runs offline — no RPC calls, no API keys. It exercises the help text, arg parser, and error paths.
+### Bash scripts (offline smoke)
 
-## Repository layout
+```bash
+bash tests/test_check_smoke.sh
+```
 
-```
-Pharos-Symbol-Collision-Detector-PSCD-/
-├── SKILL.md              # Skill contract (Capability Index, Error Handling, Security Reminders)
-├── README.md             # This file
-├── foundry.toml          # Minimal config so cast can find the project root
-├── LICENSE               # MIT
-├── assets/
-│   └── networks.json     # mainnet + testnet chain config (read by every script)
-├── scripts/
-│   └── check.sh          # The single bash script that does the work
-└── tests/
-    └── test_*.sh         # Offline smoke test (no cast required)
-```
+Tests cover: `--help` works, missing args rejected, bad network rejected,
+invalid numeric flags rejected, reversed block ranges rejected, missing
+cast error is clear.
 
 ## License
 
 MIT — see `LICENSE`.
-
----

@@ -1,6 +1,24 @@
+# Python
 __pycache__/
 *.pyc
-.DS_Store
 .venv/
 *.egg-info/
 .pytest_cache/
+
+# OS
+.DS_Store
+
+# Foundry build artifacts (out/, cache/, broadcast/ excluded; lib/forge-std is tracked for self-contained builds)
+out/
+cache/
+broadcast/
+.gas-snapshot
+
+# Environment / secrets
+.env
+.env.local
+*.key
+
+# Local testing outputs
+/tmp/
+/tmp_*.json
