@@ -97,11 +97,15 @@ echo "    Balance:       $BAL $NATIVE_TOKEN"
 echo ""
 
 # Deploy via forge create (single-file contract, no constructor args)
-DEPLOY_OUT=$(forge create "$CONTRACT_SRC" \
+# Use --broadcast to actually send the tx, and capture both the receipt JSON and stdout
+DEPLOY_OUT=$(forge create "$CONTRACT_SRC:SymbolRegistry" \
   --rpc-url "$RPC_URL" \
   --private-key "$PRIVATE_KEY" \
-  --json 2>&1)
+  --broadcast 2>&1)
 DEPLOY_EXIT=$?
+
+# forge create prints "Deployer: ...\nDeployed to: 0x...\nTransaction hash: 0x..." to stdout
+# when --broadcast is used (without --json). Use that output.
 
 if [ $DEPLOY_EXIT -ne 0 ]; then
   echo "deploy_registry: forge create failed:" >&2
@@ -109,8 +113,8 @@ if [ $DEPLOY_EXIT -ne 0 ]; then
   exit 1
 fi
 
-DEPLOYED_TO=$(echo "$DEPLOY_OUT" | python3 -c "import json,sys; print(json.load(sys.stdin).get('deployedTo',''))" 2>/dev/null)
-TX_HASH=$(echo "$DEPLOY_OUT" | python3 -c "import json,sys; print(json.load(sys.stdin).get('transactionHash',''))" 2>/dev/null)
+DEPLOYED_TO=$(echo "$DEPLOY_OUT" | grep -oE "Deployed to:[[:space:]]*0x[a-fA-F0-9]{40}" | head -1 | sed 's/.*[[:space:]]//')
+TX_HASH=$(echo "$DEPLOY_OUT" | grep -oE "Transaction hash:[[:space:]]*0x[a-fA-F0-9]{64}" | head -1 | sed 's/.*[[:space:]]//')
 
 if [ -z "$DEPLOYED_TO" ]; then
   echo "deploy_registry: could not parse deployedTo from forge output:" >&2

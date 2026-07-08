@@ -127,6 +127,8 @@ parts = parse_tuple(raw) if raw and raw.strip() else []
 def to_int(x):
     x = x.strip()
     if not x: return 0
+    # cast can append " [1e18]" scientific notation suffix when decoding big numbers; strip it
+    x = x.split()[0]
     if x.startswith("0x"):
         return int(x, 16)
     return int(x)

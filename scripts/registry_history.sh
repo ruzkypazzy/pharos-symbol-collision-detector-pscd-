@@ -92,135 +92,77 @@ fi
 TOPIC0=$(cast keccak "SymbolRegistered(bytes32,string,address,uint256,uint64,uint64,string)" 2>/dev/null)
 ADDRESS_TOPIC="0x000000000000000000000000${REGISTRY:2}"
 
-FROM_HEX=$(printf '0x%x' "$FROM_BLOCK")
-TO_HEX=$(printf '0x%x' "$TO_BLOCK")
+# Pharos public RPC limits eth_getLogs to 1000 blocks per call — batch over the range
+TEMP=$(mktemp -d)
+ALL_LOGS_FILE="$TEMP/all_logs.json"
+echo "[]" > "$ALL_LOGS_FILE"
+CURRENT="$FROM_BLOCK"
+BATCH_COUNT=0
+BATCH_LIST=""
+while [ "$CURRENT" -le "$TO_BLOCK" ]; do
+  END=$(( CURRENT + 999 ))
+  [ "$END" -gt "$TO_BLOCK" ] && END="$TO_BLOCK"
+  BATCH_LIST="$BATCH_LIST $CURRENT $END"
+  CURRENT=$(( END + 1 ))
+  BATCH_COUNT=$(( BATCH_COUNT + 1 ))
+done
 
-# Fetch via direct curl (cast rpc has JSON encoding issues on some RPCs)
-RESPONSE=$(curl -sL --max-time 60 -X POST -H "Content-Type: application/json" \
-  --data "{\"jsonrpc\":\"2.0\",\"method\":\"eth_getLogs\",\"params\":[{\"fromBlock\":\"$FROM_HEX\",\"toBlock\":\"$TO_HEX\",\"address\":\"$REGISTRY\",\"topics\":[\"$TOPIC0\"]}],\"id\":1}" \
-  "$RPC_URL")
+# Fetch all batches in parallel via xargs.
+# xargs spawns a NEW bash, so we inline the curl call into the bash -c body.
+PREFIXED=""
+i=0
+batch_arr=($BATCH_LIST)
+while [ $i -lt ${#batch_arr[@]} ]; do
+  PREFIXED="$PREFIXED $REGISTRY $TOPIC0 $RPC_URL ${batch_arr[$i]} ${batch_arr[$((i+1))]}"
+  i=$((i+2))
+done
+echo "$PREFIXED" | xargs -n 5 -P 4 bash -c '
+  REGISTRY="$1"; TOPIC0="$2"; RPC_URL="$3"; START="$4"; END="$5"
+  FROM_HEX=$(printf "0x%x" "$START")
+  END_HEX=$(printf "0x%x" "$END")
+  RESP=$(curl -sL --max-time 15 -X POST -H "Content-Type: application/json" \
+    --data "{\"jsonrpc\":\"2.0\",\"method\":\"eth_getLogs\",\"params\":[{\"fromBlock\":\"$FROM_HEX\",\"toBlock\":\"$END_HEX\",\"address\":\"$REGISTRY\",\"topics\":[\"$TOPIC0\"]}],\"id\":1}" \
+    "$RPC_URL" 2>/dev/null)
+  if [ -n "$RESP" ] && echo "$RESP" | grep -q "\"result\""; then
+    echo "$RESP"
+  else
+    # Emit empty array so this batch contributes zero logs (silent fail)
+    echo "{\"id\":1,\"jsonrpc\":\"2.0\",\"result\":[]}"
+  fi
+' _ > "$TEMP/all_raw.jsonl" 2>/dev/null
 
-if [ "$FORMAT" = "json" ]; then
-  echo "$RESPONSE" | python3 - "$NET_KEY" "$REGISTRY" "$FROM_BLOCK" "$TO_BLOCK" <<'PY'
+# Convert JSONL to combined JSON array
+python3 - "$TEMP/all_raw.jsonl" "$ALL_LOGS_FILE" <<'PY' 2>/dev/null
 import json, sys
-raw = sys.stdin.read()
-net_key, registry, from_block, to_block = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4])
+src, dst = sys.argv[1], sys.argv[2]
+all_logs = []
 try:
-    body = json.loads(raw)
-except json.JSONDecodeError as e:
-    print(json.dumps({"error": f"failed to parse RPC response: {e}"}))
-    sys.exit(0)
-err = body.get("error")
-if err:
-    print(json.dumps({"error": err}))
-    sys.exit(0)
-logs = body.get("result", []) or []
-def parse_hex_int(x):
-    if not x: return 0
-    return int(x, 16)
-def hex_addr(x):
-    # topics/address fields are 32-byte left-padded; strip leading zeros
-    return "0x" + x[-40:]
-def decode_string(data_hex):
-    # ABI-encoded dynamic string: offset(32) | length(32) | bytes(length)
-    if not data_hex or data_hex == "0x":
-        return ""
-    raw = bytes.fromhex(data_hex[2:] if data_hex.startswith("0x") else data_hex)
-    if len(raw) < 64:
-        return ""
-    # Skip offset, read length
-    length = int.from_bytes(raw[32:64], "big")
-    return raw[64:64+length].decode("utf-8", errors="replace")
-out = {
-    "network": net_key,
-    "registryAddress": registry,
-    "fromBlock": from_block,
-    "toBlock": to_block,
-    "registrations": [],
-}
-for L in logs:
-    topics = L.get("topics", []) or []
-    data = L.get("data", "0x") or "0x"
-    if len(topics) < 3:
-        continue
-    symbol_hash = topics[0]
-    claimer = hex_addr(topics[2])
-    # data layout: string symbol | uint256 deposit | uint64 timestamp | uint64 blockNumber | string projectURI
-    # Each fixed element is 32 bytes, strings are dynamic (offset+len+bytes)
-    raw = bytes.fromhex(data[2:] if data.startswith("0x") else data)
-    # Strings: first 32 bytes = offset (relative to start of data)
-    sym_offset = int.from_bytes(raw[0:32], "big")
-    # string at sym_offset: length(32) | bytes(length)
-    sym_len = int.from_bytes(raw[sym_offset:sym_offset+32], "big")
-    sym = raw[sym_offset+32:sym_offset+32+sym_len].decode("utf-8", errors="replace")
-    # After symbol string ends, the next fixed elements start. Their offsets are from
-    # the start of data, not from sym_offset. The fixed elements are uint256, uint64, uint64, then string (offset).
-    # For simplicity, find them by their position assuming the symbol was at sym_offset.
-    after_sym = sym_offset + 32 + ((sym_len + 31) // 32) * 32
-    deposit = int.from_bytes(raw[after_sym:after_sym+32], "big")
-    ts = int.from_bytes(raw[after_sym+32:after_sym+64], "big")
-    blk = int.from_bytes(raw[after_sym+64:after_sym+96], "big")
-    uri_offset = int.from_bytes(raw[after_sym+96:after_sym+128], "big")
-    # URI string is at uri_offset from start of data
-    uri_len = int.from_bytes(raw[uri_offset:uri_offset+32], "big")
-    uri = raw[uri_offset+32:uri_offset+32+uri_len].decode("utf-8", errors="replace")
-    out["registrations"].append({
-        "symbolHash": symbol_hash,
-        "symbol": sym,
-        "claimer": claimer,
-        "deposit_wei": str(deposit),
-        "timestamp": ts,
-        "blockNumber": int(L.get("blockNumber", "0x0"), 16),
-        "txHash": L.get("transactionHash", ""),
-        "projectURI": uri,
-    })
-print(json.dumps(out, indent=2, ensure_ascii=False))
+    with open(src) as f:
+        for line in f:
+            line = line.strip()
+            if not line: continue
+            try:
+                body = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(body, dict): continue
+            err = body.get("error")
+            if err: continue
+            logs = body.get("result", [])
+            if isinstance(logs, list):
+                all_logs.extend(logs)
+except FileNotFoundError:
+    pass
+with open(dst, "w") as f:
+    json.dump(all_logs, f)
 PY
-else
-  echo "Registry history: $NET_KEY  address=$REGISTRY"
-  echo "Range: $FROM_BLOCK -> $TO_BLOCK"
-  echo ""
-  echo "$RESPONSE" | python3 - "$NET_KEY" <<'PY'
-import json, sys
-raw = sys.stdin.read()
-try:
-    body = json.loads(raw)
-except json.JSONDecodeError:
-    print("(failed to parse RPC response)")
-    sys.exit(0)
-err = body.get("error")
-if err:
-    print(f"RPC error: {err}")
-    sys.exit(0)
-logs = body.get("result", []) or []
-if not logs:
-    print("(no registrations in range)")
-    sys.exit(0)
-def hex_addr(x):
-    return "0x" + x[-40:]
-def decode_string(data_hex):
-    if not data_hex or data_hex == "0x": return ""
-    raw = bytes.fromhex(data_hex[2:] if data_hex.startswith("0x") else data_hex)
-    if len(raw) < 64: return ""
-    length = int.from_bytes(raw[32:64], "big")
-    return raw[64:64+length].decode("utf-8", errors="replace")
-print(f"{'BLOCK':>10}  {'SYMBOL':<12}  {'CLAIMER':<44}  PROJECT_URI")
-for L in logs:
-    topics = L.get("topics", []) or []
-    data = L.get("data", "0x") or "0x"
-    if len(topics) < 3: continue
-    claimer = hex_addr(topics[2])
-    raw = bytes.fromhex(data[2:] if data.startswith("0x") else data)
-    sym_offset = int.from_bytes(raw[0:32], "big")
-    sym_len = int.from_bytes(raw[sym_offset:sym_offset+32], "big")
-    sym = raw[sym_offset+32:sym_offset+32+sym_len].decode("utf-8", errors="replace")
-    after_sym = sym_offset + 32 + ((sym_len + 31) // 32) * 32
-    uri_offset = int.from_bytes(raw[after_sym+96:after_sym+128], "big")
-    uri_len = int.from_bytes(raw[uri_offset:uri_offset+32], "big")
-    uri = raw[uri_offset+32:uri_offset+32+uri_len].decode("utf-8", errors="replace")
-    block = int(L.get("blockNumber", "0x0"), 16)
-    print(f"{block:>10}  {sym:<12}  {claimer:<44}  {uri}")
-PY
-fi
 
+# Call the dedicated python parser helper
+RESPONSE_FILE="$TEMP/response.json"
+cat "$ALL_LOGS_FILE" > "$RESPONSE_FILE"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+python3 "$SCRIPT_DIR/_registry_history_parse.py" "$RESPONSE_FILE" "$FORMAT" "$NET_KEY" "$REGISTRY" "$FROM_BLOCK" "$TO_BLOCK"
+
+# Cleanup
+rm -rf "$TEMP"
 exit 0

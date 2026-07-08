@@ -217,5 +217,3 @@ cast error is clear.
 ## License
 
 MIT — see `LICENSE`.
-
-<!-- cache-refresh -->

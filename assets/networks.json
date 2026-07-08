@@ -19,13 +19,13 @@
       "explorerApiUrl": "https://api.socialscan.io/pharos-mainnet",
       "nativeToken": "PROS",
       "contracts": {
-        "SymbolRegistry": ""
+        "SymbolRegistry": "0x6A9Eb713a8055d6ee46aD01641021255f62E6190"
       }
     }
   ],
   "defaultNetwork": "mainnet",
   "comments": {
-    "defaultNetwork": "PSCD scanner defaults to mainnet (read-only, no risk). The on-chain SymbolRegistry contract can be deployed to either network — fill contracts.SymbolRegistry after running scripts/deploy_registry.sh.",
+    "defaultNetwork": "PSCD scanner defaults to mainnet (read-only, no risk). The on-chain SymbolRegistry contract can be deployed to either network \u2014 fill contracts.SymbolRegistry after running scripts/deploy_registry.sh.",
     "registryDeployment": "After deploying SymbolRegistry to a network, the contract address is written back to this file automatically by deploy_registry.sh."
   }
 }
