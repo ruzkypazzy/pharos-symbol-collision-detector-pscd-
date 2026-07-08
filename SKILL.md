@@ -1,5 +1,5 @@
 ---
-name: Pharos-Symbol-Collision-Detector-PSCD-
+name: Pharos-Symbol-Collision-Detector-PSCD
 description: |
   Use this skill when a developer asks whether a candidate token symbol is
   safe to launch on Pharos. PSCD combines two surfaces: (1) it scans Pharos
