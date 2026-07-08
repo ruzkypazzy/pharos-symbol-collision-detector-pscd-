@@ -1,199 +1,130 @@
 # Pharos Symbol Collision Detector (PSCD)
 
-> Two surfaces, one Skill. Scans Pharos for ERC-20 symbol collisions and
-> lets developers file refundable on-chain claims before they launch.
+> Cast-only Skill: check, file, and release symbol claims on Pharos mainnet
+> through a deployed `SymbolRegistry` contract. No bash scripts, no shell
+> execution — every operation is a direct `cast` invocation.
 
-[![foundry](https://img.shields.io/badge/built%20with-Foundry-orange)]()
 [![solidity](https://img.shields.io/badge/contract-Solidity%200.8.24-blue)]()
 [![license](https://img.shields.io/badge/license-MIT-green)]()
-[![pharos](https://img.shields.io/badge/network-Pharos%20mainnet%20%2B%20testnet-blueviolet)]()
+[![pharos](https://img.shields.io/badge/network-Pharos%20mainnet-blueviolet)]()
 [![ai-agent](https://img.shields.io/badge/callable%20by-AI%20agent-purple)]()
+[![binaries](https://img.shields.io/badge/requires-only%20cast-orange)]()
 
 ## What is this?
 
 PSCD is a Pharos Skill designed to be packaged as a **Service Agent** on
-[Anvita Flow](https://flow.anvita.xyz). It protects ERC-20 token developers
-from launching with a symbol that's already taken, by combining:
+[Anvita Flow](https://flow.anvita.xyz). It exposes a deployed
+`SymbolRegistry` Solidity contract on Pharos Pacific mainnet (chain 1672) that
+lets developers record a refundable PHRS/PROS deposit claim for a token
+symbol and check whether anyone has already claimed it.
 
-1. **Off-chain scanner** — walks Pharos Pacific mainnet via `cast`,
-   finds ERC-20 mints via Transfer-from-zero events, and reports which
-   tokens share a candidate symbol. Read-only, no funds at risk.
-2. **On-chain registry** — a `SymbolRegistry` Solidity contract (same source
-   deployed to both Pacific mainnet and Atlantic testnet) that lets a
-   developer file a refundable PHRS/PROS deposit claim. Anyone can query
-   active claims; the original claimer can release and get the deposit back.
-
-Together they cover both **reality** (existing ERC-20s) and **intent**
-(filed claims).
-
-## Architecture
-
+**Deployed contract:**
 ```
-                   ┌─────────────────────────────────────────┐
-                   │       PSCD Service Agent                │
-                   │       (Anvita Flow hosted)              │
-                   └────────────────────┬────────────────────┘
-                                        │
-              ┌─────────────────────────┴─────────────────────────┐
-              │                                                    │
-              ▼                                                    ▼
-   ┌────────────────────────┐                      ┌──────────────────────────────┐
-   │ Off-chain scanner      │                      │ On-chain SymbolRegistry      │
-   │ scripts/check.sh       │                      │ SymbolRegistry.sol           │
-   │ (read-only, cast RPC)  │                      │ + scripts/register_*.sh     │
-   └──────────┬─────────────┘                      └──────────┬───────────────────┘
-              │                                                │
-              ▼                                                ▼
-      Pharos Pacific Mainnet                          Pharos Pacific Mainnet
-      chain 1672, RPC:                                + Pharos Atlantic Testnet
-      https://rpc.pharos.xyz                          chain 688689, RPC:
-                                                      https://atlantic.dplabs-internal.com
+SymbolRegistry = 0x6A9Eb713a8055d6ee46aD01641021255f62E6190
 ```
+[View on PharosScan](https://www.pharosscan.xyz/address/0x6A9Eb713a8055d6ee46aD01641021255f62E6190)
 
-## Quick start (30 seconds, no API keys)
+**The Skill is intentionally a thin wrapper around `cast` calls.** Every operation
+is a single direct invocation — no bash scripts, no scripts/ directory mounting,
+no shell execution required. This makes it compatible with hosted AI agent
+runtimes that only expose the `cast` binary (like Anvita Flow's hosted runtime).
+
+## Operations
+
+All operations are single `cast` calls against the deployed contract:
+
+### Read operations (no private key required)
 
 ```bash
-git clone https://github.com/ruzkypazzy/Pharos-Symbol-Collision-Detector-PSCD-.git
-cd Pharos-Symbol-Collision-Detector-PSCD-
+RPC=https://rpc.pharos.xyz
+REG=0x6A9Eb713a8055d6ee46aD01641021255f62E6190
 
-# Install Foundry if you don't have it
-curl -L https://foundry.paradigm.xyz | bash && foundryup
+# Check if a symbol has an active claim
+cast call $REG "isClaimed(string)(bool)" "SKP" --rpc-url $RPC
+# => true / false
 
-# Run the off-chain scanner demo (no deploy, no key needed)
-bash scripts/check.sh --demo
+# Get the full claim record (claimer, deposit, timestamp, block, URI, active)
+cast call $REG "getClaim(string)((address,uint256,uint64,uint64,string,bool))" "SKP" --rpc-url $RPC
+# => (0xAddress, 1000000000000000, 1783488188, 11850158, "https://...", true)
+
+# Count active claims by an address
+cast call $REG "activeClaimCountOf(address)(uint256)" "0xADDRESS" --rpc-url $RPC
+# => uint256
+
+# Total PHRS held by the contract (sum of active deposits)
+cast call $REG "totalHeld()(uint256)" --rpc-url $RPC
+# => uint256 (in wei)
 ```
 
-## Full installation
+### Write operations (require `$PRIVATE_KEY`)
 
 ```bash
-git clone https://github.com/ruzkypazzy/Pharos-Symbol-Collision-Detector-PSCD-.git
-cd Pharos-Symbol-Collision-Detector-PSCD-
-chmod +x scripts/*.sh
+RPC=https://rpc.pharos.xyz
+REG=0x6A9Eb713a8055d6ee46aD01641021255f62E6190
 
-# 1. Foundry (mandatory)
-curl -L https://foundry.paradigm.xyz | bash && foundryup
+# File a claim with a refundable 0.001 PHRS/PROS deposit
+cast send $REG "register(string,string)" "MYTOK" "https://myproj.example" \
+  --value 0.001ether \
+  --private-key $PRIVATE_KEY \
+  --rpc-url $RPC
 
-# 2. python3 (standard library only)
-python3 --version   # 3.10+ recommended
+# Release your claim and refund the deposit in full
+cast send $REG "release(string)" "MYTOK" \
+  --private-key $PRIVATE_KEY \
+  --rpc-url $RPC
 
-# 3. jq (optional, for pretty JSON)
-# macOS:   brew install jq
-# Ubuntu:  sudo apt-get install -y jq
+# Owner only: pause new registrations
+cast send $REG "pause()" --private-key $PRIVATE_KEY --rpc-url $RPC
 
-# 4. Set up your wallet (only needed for on-chain ops)
-export PRIVATE_KEY=0xYourPrivateKeyHere
-export DEPLOYER=$(cast wallet address --private-key $PRIVATE_KEY)
+# Owner only: unpause
+cast send $REG "unpause()" --private-key $PRIVATE_KEY --rpc-url $RPC
 ```
 
-## Deploy the on-chain registry
+## Installation
+
+The only requirement is `cast` from Foundry:
 
 ```bash
-# Deploy to Atlantic testnet first (free PHRS)
-bash scripts/deploy_registry.sh --network testnet
-
-# Or deploy to Pacific mainnet (costs ~0.05 PROS)
-bash scripts/deploy_registry.sh --network mainnet
-
-# The script writes the address back to assets/networks.json
-# Verify on PharosScan after ~10 seconds
+curl -L https://foundry.paradigm.xyz | bash
+foundryup
 ```
 
-## Usage examples
+That's it. No bash scripts to clone. No Python. No jq.
 
-### Off-chain scanner
+For write operations you also need a Pharos wallet with native PHRS (testnet) or PROS (mainnet) for gas + the 0.001 refundable deposit.
 
-```bash
-# Check if 'USDC' is taken (last 5K blocks, ~5s)
-bash scripts/check.sh USDC --max-blocks 5000
+## Networks
 
-# Wider scan, full JSON output
-bash scripts/check.sh SKP --max-blocks 100000 --format json
+| Network | Chain ID | RPC | Contract |
+|---|---:|---|---|
+| Pacific mainnet | 1672 | `https://rpc.pharos.xyz` | `0x6A9Eb713a8055d6ee46aD01641021255f62E6190` (deployed) |
+| Atlantic testnet | 688689 | `https://atlantic.dplabs-internal.com` | (not yet deployed) |
 
-# Custom block range
-bash scripts/check.sh SKP --from-block 9000000 --to-block 9050000
-
-# Run the demo (USDC, last 5K blocks, markdown)
-bash scripts/check.sh --demo
-```
-
-### On-chain registry
-
-```bash
-# Check if 'SKP' is already claimed
-bash scripts/query_registry.sh SKP --network mainnet
-
-# File your own claim (deposit 0.001 PROS, refundable)
-bash scripts/register_symbol.sh SKP --network mainnet \
-  --project-uri "https://skp.example"
-
-# Audit recent claims
-bash scripts/registry_history.sh --network mainnet \
-  --from-block 11000000 --to-block 11500000
-
-# Release your claim and refund the deposit
-bash scripts/release_symbol.sh SKP --network mainnet
-```
-
-### Combined safety check (the recommended pattern)
-
-Before launching an ERC-20, run BOTH surfaces:
-
-```bash
-SYMBOL=USDC-PROJ
-
-# 1. Off-chain: is it already used?
-bash scripts/check.sh $SYMBOL --max-blocks 100000 --format json
-
-# 2. On-chain: has anyone filed a claim?
-bash scripts/query_registry.sh $SYMBOL --network mainnet
-
-# 3. (If both clear) Lock in your intent
-bash scripts/register_symbol.sh $SYMBOL --network mainnet \
-  --project-uri "https://myproject.example"
-```
+The deployed contract address is also recorded in `assets/networks.json`.
 
 ## As an AI agent (Service Agent on Anvita Flow)
 
-This Skill is designed to be hosted on [Anvita Flow](https://flow.anvita.xyz)
-as a Service Agent. The Steward Agent in Anvita On discovers PSCD via its
-`SKILL.md` Capability Index and invokes it like any other Service Agent.
+This Skill is meant to be hosted on Anvita Flow as a Service Agent. The
+Steward Agent in Anvita On discovers PSCD via its `SKILL.md` Capability
+Index and invokes it like any other Service Agent.
+
+Because every operation is a direct `cast` invocation, the Steward Agent
+can run it without needing to mount any bash scripts or install any toolchains
+beyond `cast`, which is already pre-installed in the Anvita Flow hosted runtime.
 
 Example invocation from a Steward Agent:
 
 ```
-User: "Is USDC safe to use on Pharos?"
-Steward Agent: invokes "Pharos Symbol Collision Detector" Service Agent
-  -> runs check.sh USDC --max-blocks 100000
-  -> runs query_registry.sh USDC --network mainnet
-Agent: "USDC is COLLISION on Pharos mainnet. There's an existing ERC-20
-  at 0xc879c018db60520f4355c26ed1a6d572cdac1815 using this symbol.
-  Choose a different ticker (e.g. USDC-PROJ, USDC2) before launching."
+User: "I want to launch a token called SKP on Pharos. Is it safe?"
+Steward Agent: invokes Pharos Symbol Collision Detector Service Agent
+  → cast call 0x6A9Eb713... "isClaimed(string)(bool)" "SKP" --rpc-url https://rpc.pharos.xyz
+Agent: "SKP is already claimed on Pharos. Active claimer is 0xCC06...
+  with a 0.001 PROS deposit, filed at unix 1783488188. Pick a different
+  symbol (e.g. SKP2, SKPX, SKP-PROJ) before launching."
 ```
 
-See `SKILL.md` for the Capability Index and `references/` for the structured
-operation docs.
-
-## Scripts
-
-| Script | Purpose | Network | Needs key? |
-|---|---|---|---|
-| `check.sh` | Off-chain ERC-20 collision scanner | mainnet (default), testnet | No |
-| `deploy_registry.sh` | One-time: deploy SymbolRegistry contract | mainnet OR testnet | Yes |
-| `query_registry.sh` | Look up an on-chain claim | mainnet OR testnet | No |
-| `register_symbol.sh` | File a refundable claim | mainnet OR testnet | Yes |
-| `release_symbol.sh` | Cancel a claim, refund deposit | mainnet OR testnet | Yes |
-| `registry_history.sh` | Audit all claims in a block range | mainnet OR testnet | No |
-
-## Networks
-
-| Network | Chain ID | RPC | Default for | Deploy registry? |
-|---|---:|---|---|---|
-| Pacific mainnet | 1672 | `https://rpc.pharos.xyz` | Off-chain scanner | Yes |
-| Atlantic testnet | 688689 | `https://atlantic.dplabs-internal.com` | Testing | Yes (free) |
-
-The same SymbolRegistry contract source compiles to a single bytecode and is
-deployed independently to each network. Addresses are stored under
-`networks[].contracts.SymbolRegistry` in `assets/networks.json`.
+See `SKILL.md` for the Capability Index and `references/registry.md` for the
+structured cast-command reference.
 
 ## Tests
 
@@ -204,15 +135,47 @@ forge build       # compile
 forge test        # 14 unit tests
 ```
 
-### Bash scripts (offline smoke)
+### Bash smoke (offline)
 
 ```bash
 bash tests/test_check_smoke.sh
 ```
 
-Tests cover: `--help` works, missing args rejected, bad network rejected,
-invalid numeric flags rejected, reversed block ranges rejected, missing
-cast error is clear.
+Tests cover: deploy helper `--help`, missing args, bad network, reversed
+block range, invalid numeric flags, bad format, and JSON schema validation
+of `assets/networks.json`.
+
+## Repository layout
+
+```
+.
+├── SKILL.md                          # Agent entry point + cast-only Capability Index
+├── README.md                         # This file
+├── foundry.toml                      # Forge config
+├── foundry.lock
+├── LICENSE                           # MIT
+├── assets/
+│   ├── contracts/
+│   │   └── SymbolRegistry.sol        # Solidity source (deployed at 0x6A9Eb713...)
+│   └── networks.json                 # RPC + chain config + contract addresses
+├── references/
+│   ├── registry.md                   # Cast-command reference for every operation
+│   └── methodology.md                # Detection algorithm + design notes
+├── scripts/
+│   └── deploy_registry.sh            # Optional: forge-based one-time deploy helper
+├── tests/
+│   ├── test_check_smoke.sh           # Offline smoke tests
+│   └── SymbolRegistry.t.sol          # 14 forge unit tests
+└── examples/
+    └── sample-report.md              # Example cast invocations and outputs
+```
+
+## Limitations
+
+- **No off-chain chain scan in this Skill version.** This Skill is scoped to the on-chain registry. For off-chain scanning of all ERC-20s on Pharos, use a separate indexer or block explorer.
+- **No ERC-721 / ERC-1155 NFT collection support.**
+- **Symbol normalization is ASCII upper-case + whitespace-strip only.** `USDC.e` ≠ `USDC`. Cyrillic homoglyphs not detected.
+- **The contract has no proxy/upgrade.** Code on mainnet is final.
 
 ## License
 

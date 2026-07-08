@@ -1,169 +1,225 @@
 # PSCD Sample Reports
 
-This file shows real example outputs from both surfaces of PSCD.
+This file shows real example outputs from the on-chain `SymbolRegistry`
+contract on Pharos Pacific mainnet. Every example is a single direct
+`cast` invocation against the deployed contract.
+
+**Deployed contract:** `SymbolRegistry = 0x6A9Eb713a8055d6ee46aD01641021255f62E6190`
+**Network:** Pharos Pacific mainnet (chain 1672), RPC `https://rpc.pharos.xyz`
 
 ---
 
-## 1. Off-chain scanner — COLLISION
+## 1. Check a candidate symbol that IS claimed
 
-A real run against Pharos Pacific mainnet in the block range
-`9,596,769 → 9,606,769`, captured for documentation.
+```
+User: "Is `SKP` safe to launch on Pharos?"
+Agent: invokes Pharos Symbol Collision Detector Service Agent
+```
 
-### Command
+### Step 1 — Check if claimed
 
 ```bash
-bash scripts/check.sh USDC --from-block 9596769 --to-block 9606769 --format json
+cast call 0x6A9Eb713a8055d6ee46aD01641021255f62E6190 \
+  "isClaimed(string)(bool)" "SKP" \
+  --rpc-url https://rpc.pharos.xyz
 ```
 
 ### Output
 
-```json
-{
-  "network": "mainnet",
-  "chainId": 1672,
-  "rpc": "https://rpc.pharos.xyz",
-  "candidate": "USDC",
-  "normalized": "usdc",
-  "from_block": 9596769,
-  "to_block": 9606769,
-  "blocks": 10001,
-  "tokens_seen": 5,
-  "verdict": "COLLISION",
-  "verdict_msg": "1 token(s) on mainnet use the symbol 'USDC'",
-  "collisions": [
-    {
-      "address": "0xc879c018db60520f4355c26ed1a6d572cdac1815",
-      "symbol": "USDC",
-      "name": "USDC",
-      "decimals": 6,
-      "ok": true,
-      "explorer": "https://www.pharosscan.xyz/token/0xc879c018db60520f4355c26ed1a6d572cdac1815"
-    }
-  ]
-}
+```
+true
 ```
 
-### What to do
-
-- **If you control this contract:** you already have a collision. Rename your token before mainnet launch.
-- **If you don't:** this is an impersonator. Do not interact with it; report it via pharosscan.
-- **If you control none:** pick a different symbol. Common substitutes: append a suffix (e.g. `USDC2`, `USDCX`).
-
----
-
-## 2. Off-chain scanner — CLEAR
-
-A nonsense symbol with no collisions.
-
-### Command
+### Step 2 — Get the full claim record
 
 ```bash
-bash scripts/check.sh ZZPSCDTEST --max-blocks 5000 --format md
+cast call 0x6A9Eb713a8055d6ee46aD01641021255f62E6190 \
+  "getClaim(string)((address,uint256,uint64,uint64,string,bool))" "SKP" \
+  --rpc-url https://rpc.pharos.xyz
 ```
 
 ### Output
 
-```markdown
-# PSCD -- Pharos Symbol Collision Detector
-
-**Verdict:** ✅ CLEAR
-
-No token on mainnet uses the symbol 'ZZPSCDTEST' in the scanned range.
-
-## Inputs
-
-- **Network:** mainnet (chain 1672)
-- **Candidate symbol:** `ZZPSCDTEST` (normalized: `zzpscdtest`)
-- **Block range:** 11758597 → 11763597
-- **Tokens seen in range:** 2
-
-## Result
-
-No token on **mainnet** uses the symbol `ZZPSCDTEST` within the scanned block range.
-
-A CLEAR result is a positive signal: the symbol you want to launch is not
-currently minted on Pharos within the scanned range.
 ```
+(0xCC06503955C5808bCc6e285A868925cB0A0A8AC0, 1000000000000000, 1783488188, 11850158, "https://second-claim.example", true)
+```
+
+Fields decoded:
+| Field | Value |
+|---|---|
+| claimer | `0xCC06503955C5808bCc6e285A868925cB0A0A8AC0` |
+| deposit | `1000000000000000` wei = 0.001 PROS |
+| timestamp (unix) | `1783488188` |
+| blockNumber | `11850158` |
+| projectURI | `https://second-claim.example` |
+| active | `true` |
+
+### What the agent should reply to the user
+
+> **SKP is already claimed on the Pharos SymbolRegistry.**
+> Active claimer: `0xCC06...`
+> Deposit: 0.001 PROS
+> Filed at unix `1783488188` (block `11850158`)
+> Project URI: `https://second-claim.example`
+>
+> **This does NOT prevent you from deploying an ERC-20 with the ticker `SKP`** —
+> Pharos does not enforce ticker uniqueness, and PSCD is a visibility layer, not
+> a deployment gate. The existing claim will be publicly visible to anyone who
+> checks before interacting with your contract.
+>
+> Pick a different symbol (e.g. `SKP2`, `SKPX`, `SKP-PROJ`) before launching.
 
 ---
 
-## 3. On-chain registry — empty claim
+## 2. Check a candidate symbol that is NOT claimed
 
-### Command
+```
+User: "Is `ZZPSCDTEST` safe to launch on Pharos?"
+```
+
+### Step 1 — Check if claimed
 
 ```bash
-bash scripts/query_registry.sh SKP --network mainnet
+cast call 0x6A9Eb713a8055d6ee46aD01641021255f62E6190 \
+  "isClaimed(string)(bool)" "ZZPSCDTEST" \
+  --rpc-url https://rpc.pharos.xyz
 ```
 
 ### Output
 
-```json
-{
-  "network": "mainnet",
-  "registryAddress": "0xYourRegistryAddress",
-  "candidate": "SKP",
-  "normalized": "skp",
-  "symbolHash": "0x...",
-  "explorer": "https://www.pharosscan.xyz/address/0xYourRegistryAddress",
-  "claimed": false
-}
+```
+false
 ```
 
----
-
-## 4. On-chain registry — active claim
-
-### Command
+### Step 2 — (Optional) Get claim record
 
 ```bash
-bash scripts/query_registry.sh USDC --network mainnet
+cast call 0x6A9Eb713a8055d6ee46aD01641021255f62E6190 \
+  "getClaim(string)((address,uint256,uint64,uint64,string,bool))" "ZZPSCDTEST" \
+  --rpc-url https://rpc.pharos.xyz
 ```
 
 ### Output
 
-```json
-{
-  "network": "mainnet",
-  "registryAddress": "0xYourRegistryAddress",
-  "candidate": "USDC",
-  "normalized": "usdc",
-  "symbolHash": "0x...",
-  "explorer": "https://www.pharosscan.xyz/address/0xYourRegistryAddress",
-  "claimed": true,
-  "claimer": "0xabcdef...",
-  "deposit_wei": "1000000000000000",
-  "timestamp": 1778000000,
-  "blockNumber": 11000123,
-  "projectURI": "https://myproject.example",
-  "active": true
-}
 ```
+(0x0000000000000000000000000000000000000000, 0, 0, 0, "", false)
+```
+
+The zero-valued tuple confirms the symbol is **not registered**. The user is free to file a claim.
+
+### What the agent should reply
+
+> **ZZPSCDTEST is currently unclaimed on the Pharos SymbolRegistry.** You can proceed to register it if you want to lock in an on-chain first-mover marker.
+
+### Step 3 — (Optional) Register the claim
+
+After the user confirms the network (Pacific mainnet, $PRIVATE_KEY is set, balance checked):
+
+```bash
+cast send 0x6A9Eb713a8055d6ee46aD01641021255f62E6190 \
+  "register(string,string)" "ZZPSCDTEST" "https://your-project.example" \
+  --value 0.001ether \
+  --private-key $PRIVATE_KEY \
+  --rpc-url https://rpc.pharos.xyz
+```
+
+### Output
+
+```
+transactionHash: "0xabcd1234..."
+```
+
+The 0.001 PROS deposit is locked. The user can release it at any time via `release(string)` for a full refund.
 
 ---
 
-## 5. Combined safety check — recommended pattern
+## 3. Release a claim and refund the deposit
 
-Before launching `USDC-PROJ` on Pharos:
-
-```bash
-SYMBOL=USDC-PROJ
-
-# Off-chain: any existing ERC-20 using this symbol?
-bash scripts/check.sh $SYMBOL --max-blocks 100000 --format json
-# => {"verdict":"CLEAR", ...}
-
-# On-chain: any active claim?
-bash scripts/query_registry.sh $SYMBOL --network mainnet
-# => {"claimed":false, ...}
-
-# Both clear — file your claim to lock in intent
-bash scripts/register_symbol.sh $SYMBOL \
-  --network mainnet \
-  --project-uri "https://myproject.example" \
-  --value 0.001ether
-# => {"txHash":"0x...", "claimHash":"0x..."}
+```
+User: "I want to release my SKP claim and get my deposit back."
 ```
 
-The agent's reply to the user:
+### Step 1 — Confirm the calling wallet is the original claimer
 
-> ✅ Off-chain scanner says CLEAR (no ERC-20 on Pharos mainnet uses `USDC-PROJ` in the last 100K blocks). Registry says NOT CLAIMED. Safe to launch. Optionally file an on-chain claim via `register_symbol.sh` to record your intent.
+```bash
+cast call 0x6A9Eb713a8055d6ee46aD01641021255f62E6190 \
+  "getClaim(string)((address,uint256,uint64,uint64,string,bool))" "SKP" \
+  --rpc-url https://rpc.pharos.xyz
+```
+
+### Output
+
+```
+(0xCC06503955C5808bCc6e285A868925cB0A0A8AC0, 1000000000000000, 1783488188, 11850158, "https://second-claim.example", true)
+```
+
+Confirm `0xCC065039...` matches the wallet derived from `$PRIVATE_KEY`:
+
+```bash
+cast wallet address --private-key $PRIVATE_KEY
+```
+
+If the addresses match, proceed with the release. If not, inform the user they need to use the wallet that originally registered.
+
+### Step 2 — Release
+
+```bash
+cast send 0x6A9Eb713a8055d6ee46aD01641021255f62E6190 \
+  "release(string)" "SKP" \
+  --private-key $PRIVATE_KEY \
+  --rpc-url https://rpc.pharos.xyz
+```
+
+### Output
+
+```
+transactionHash: "0xdef45678..."
+```
+
+### Verify the release
+
+```bash
+cast call 0x6A9Eb713a8055d6ee46aD01641021255f62E6190 \
+  "isClaimed(string)(bool)" "SKP" \
+  --rpc-url https://rpc.pharos.xyz
+```
+
+### Output
+
+```
+false
+```
+
+The deposit is refunded in full to the original claimer; the claim record is cleared.
+
+---
+
+## 4. Read-only inspection
+
+```
+User: "How many active claims does my wallet have? How much PROS is the registry holding?"
+```
+
+```bash
+MY_ADDR=$(cast wallet address --private-key $PRIVATE_KEY)
+
+cast call 0x6A9Eb713a8055d6ee46aD01641021255f62E6190 \
+  "activeClaimCountOf(address)(uint256)" "$MY_ADDR" \
+  --rpc-url https://rpc.pharos.xyz
+```
+
+```
+3
+```
+
+```bash
+cast call 0x6A9Eb713a8055d6ee46aD01641021255f62E6190 \
+  "totalHeld()(uint256)" \
+  --rpc-url https://rpc.pharos.xyz
+```
+
+```
+1000000000000000 [1e15]
+```
+
+(The wei value `1000000000000000` is 0.001 PROS.)

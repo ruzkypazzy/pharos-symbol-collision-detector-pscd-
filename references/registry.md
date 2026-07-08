@@ -1,304 +1,242 @@
-# SymbolRegistry Operations
+# SymbolRegistry Cast Reference
 
-> The `SymbolRegistry` contract is the on-chain counterpart to the PSCD
-> off-chain scanner. While `scripts/check.sh` discovers ERC-20 mints that
-> already use a symbol, `SymbolRegistry` lets a developer file an explicit,
-> refundable PHRS/PROS deposit to **claim** a symbol on-chain. Anyone can
-> query the registry to see active claims.
->
-> **Network Configuration**: RPC URLs and chain IDs are read from
-> `assets/networks.json`. Contract addresses per network live under
-> `networks[].contracts.SymbolRegistry`. If the address is missing, run
-> `scripts/deploy_registry.sh --network <name>` first.
->
-> **Private Key Configuration**: All write operations require
-> `--private-key $PRIVATE_KEY`. Foundry does NOT auto-read this env var;
-> you must always pass it explicitly.
->
-> **Deposit**: minimum `0.001 ether` (in the chain's native token).
-> Fully refundable by the original claimer via `release()`.
+Every operation on the SymbolRegistry contract is a single direct `cast` call. No shell scripts, no Python helpers, no intermediate tools. This document gives the full cast invocation for every supported operation.
 
----
+## Network Configuration
 
-## Deploy SymbolRegistry (one-time per network)
+**Deployed on Pharos Pacific mainnet (chain 1672):**
 
-### Overview
-Deploys `SymbolRegistry.sol` to the specified Pharos network and writes the
-resulting address back into `assets/networks.json` so other scripts can find
-it. Idempotent: if the address is already configured for that network, the
-script exits cleanly.
-
-### Command Template
-
-```bash
-bash scripts/deploy_registry.sh --network mainnet|testnet
-```
-
-### Parameters
-
-| Parameter | Type | Required | Description |
-|---|---|---|---|
-| `--network` | string | Yes | `mainnet` (Pacific, chain 1672) or `testnet` (Atlantic, chain 688689) |
-| `--rpc-url` | string | No | Override RPC URL (default: from `assets/networks.json`) |
-| `--private-key` | string | No | Deployer key (default: `$PRIVATE_KEY` env var) |
-| `--force` | flag | No | Redeploy even if already configured |
-
-### Output Parsing
-
-| Field | Description |
+| Field | Value |
 |---|---|
-| `deployedTo` | Deployed contract address |
-| `txHash` | Deployment transaction hash |
-| `network` | Network name as configured |
+| `SymbolRegistry` | `0x6A9Eb713a8055d6ee46aD01641021255f62E6190` |
+| RPC URL | `https://rpc.pharos.xyz` |
+| Chain ID | `1672` |
+| Native currency | PHRS / PROS (1 PHRS = 1000 PROS) |
+| Explorers | https://www.pharosscan.xyz |
 
-The script updates `assets/networks.json` so the next call to
-`register_symbol.sh` or `query_registry.sh` finds the address automatically.
+**Testnet (Atlantic, chain 688689):** contract is not yet deployed. The fingerprint may also be referenced through `assets/networks.json` for future testnet deploys.
 
-### Error Handling
+## Pre-flight (every write operation)
 
-| Error | Cause | Fix |
-|---|---|---|
-| `cast: command not found` | Foundry not installed | Run `curl -L https://foundry.paradigm.xyz \| bash && foundryup` |
-| `insufficient funds` | Wallet has no native token | Get faucet PHRS (testnet) or PROS (mainnet) |
-| `nonce too low` | Pending tx from same key | Wait for prior tx or use a fresh wallet |
-| `SymbolRegistry already configured` | Address exists in `networks.json` | Pass `--force` to redeploy |
+Before any `cast send`, the agent should verify:
 
-> **Agent Guidelines**:
-> 1. Confirm the user wants a fresh deploy before running with `--force`.
-> 2. Default `defaultNetwork` in `assets/networks.json` is `atlantic-testnet`; switch to mainnet explicitly if the user says so.
-> 3. After deploy, verify the contract on PharosScan (Atlantic or Pacific).
-> 4. Record the `deployedTo` address and tx hash in your reply.
+1. **`$PRIVATE_KEY` is set** — passed via `--private-key $PRIVATE_KEY`. Foundry does NOT auto-read this env var — every cast command must include it explicitly.
+2. **Derive the deployer address** — `cast wallet address --private-key $PRIVATE_KEY`.
+3. **Confirm the network** with the user — Pacific mainnet or Atlantic testnet.
+4. **Auto balance check** — `cast balance <deployer> --rpc-url https://rpc.pharos.xyz --ether`. Abort if below (operation cost + 0.001 deposit + gas buffer).
 
 ---
 
-## Register a Symbol Claim
+## Check if a symbol is claimed
 
-### Overview
-Posts a refundable deposit and records an active claim for the candidate
-symbol. The candidate is normalized (ASCII upper-case, whitespace stripped)
-on-chain, so `usdc`, `USDC`, and ` USDC ` all map to the same claim slot.
+`cast call 0x6A9Eb713a8055d6ee46aD01641021255f62E6190 "isClaimed(string)(bool)" "SKP" --rpc-url https://rpc.pharos.xyz`
 
-### Command Template
+**Parameters**
 
-```bash
-bash scripts/register_symbol.sh SYMBOL \
-  --network mainnet|testnet \
-  --project-uri "https://yourproject.example" \
-  --value 0.001ether
+| Name | Type | Description |
+|---|---|---|
+| symbol | string | The ASCII token symbol to check (case-insensitive, whitespace-trimmed) |
+
+**Returns** `bool` — true if there's an active claim for the given symbol, false otherwise.
+
+**Output**
+
+```
+true
 ```
 
-### Parameters
+or
 
-| Parameter | Type | Required | Description |
-|---|---|---|---|
-| `SYMBOL` | string | Yes | The token symbol to claim (1–32 chars). Case-insensitive on-chain. |
-| `--network` | string | Yes | `mainnet` or `testnet` |
-| `--project-uri` | string | No | Free-form project link. Recorded in the `SymbolRegistered` event. |
-| `--value` | string | No | Deposit in native token. Default: `0.001ether`. |
-| `--rpc-url` | string | No | Override RPC URL |
-| `--private-key` | string | No | Sender key (default: `$PRIVATE_KEY` env var) |
+```
+false
+```
 
-### Output Parsing
+**Error / Edge cases**
 
-| Field | Description |
-|---|---|
-| `txHash` | Transaction hash |
-| `claimHash` | keccak256 of the normalized symbol (the on-chain claim slot) |
-| `blockNumber` | Block the claim was registered in |
-| `explorer` | PharosScan link to the tx |
-
-### Error Handling
-
-| Error | Cause | Fix |
-|---|---|---|
-| `BelowMinimumDeposit` (revert) | `--value` < 0.001 ether | Pass `--value 0.001ether` or higher |
-| `AlreadyClaimed` (revert) | Symbol has an active claim | Query first with `query_registry.sh`; release if you own it |
-| `PausedState` (revert) | Contract is paused by owner | Wait for owner to unpause or contact contract owner |
-| `execution reverted` (generic) | Various | Inspect revert reason via `cast 4-byte-decode <selector>` if non-standard |
-| `SymbolRegistry not configured for <network>` | Address missing in `networks.json` | Run `deploy_registry.sh --network <network>` first |
-| `insufficient funds for gas` | Wallet empty | Top up native token balance |
-
-> **Agent Guidelines**:
-> 1. **Complete Write Operation Pre-checks** (see top-level `SKILL.md`):
->    - Confirm `$PRIVATE_KEY` is set
->    - Derive address via `cast wallet address --private-key $PRIVATE_KEY`
->    - Confirm network with the user
->    - Check native balance: `cast balance <deployer> --rpc-url <rpc> --ether`
-> 2. Suggest `0.001ether` as the default deposit; allow user to over-deposit if they want to.
-> 3. After success, surface the PharosScan tx link to the user.
-> 4. Remind the user the deposit is refundable via `release()`.
+- The contract normalizes the symbol (uppercase, whitespace stripped) before lookup. `SKP`, `skp`, and ` SKP ` all match.
+- This returns `false` even if there are historical (released) claims — `isClaimed()` only signals *active* claims.
 
 ---
 
-## Query an On-Chain Claim
+## Get the full claim record
 
-### Overview
-Read-only. Checks whether a symbol has an active claim and returns the full
-claim record. Use this **before** registering to avoid `AlreadyClaimed`
-reverts.
+`cast call 0x6A9Eb713a8055d6ee46aD01641021255f62E6190 "getClaim(string)((address,uint256,uint64,uint64,string,bool))" "SKP" --rpc-url https://rpc.pharos.xyz`
 
-### Command Template
+**Parameters**
 
-```bash
-bash scripts/query_registry.sh SYMBOL --network mainnet|testnet
-```
+| Name | Type | Description |
+|---|---|---|
+| symbol | string | The ASCII token symbol to look up |
 
-### Parameters
-
-| Parameter | Type | Required | Description |
-|---|---|---|---|
-| `SYMBOL` | string | Yes | Symbol to look up (normalized the same way as registration) |
-| `--network` | string | Yes | `mainnet` or `testnet` |
-| `--rpc-url` | string | No | Override RPC URL |
-
-### Output Parsing
+**Returns** a tuple `(address, uint256, uint64, uint64, string, bool)`:
 
 | Field | Type | Description |
 |---|---|---|
-| `claimed` | bool | True if there's an active claim |
-| `claimer` | address | Address that filed the claim |
-| `deposit` | string (wei) | Refundable deposit in wei |
-| `timestamp` | uint64 | Unix timestamp of registration |
-| `blockNumber` | uint64 | Block number of registration |
-| `projectURI` | string | User-supplied project URI |
-| `active` | bool | Always `true` here (inactive claims are filtered out) |
+| claimer | address | The address that filed the claim |
+| deposit | uint256 | The locked deposit amount, in wei |
+| timestamp | uint64 | The unix timestamp at which the claim was filed |
+| blockNumber | uint64 | The block number at which the claim was filed |
+| projectURI | string | An optional URI describing the project |
+| active | bool | Whether the claim is currently active |
 
-When `claimed` is false, only `claimed`, `network`, `candidate`, `symbolHash`,
-`registryAddress`, and `explorer` are populated.
+**Output**
 
-### Error Handling
+```
+(0xCC06503955C5808bCc6e285A868925cB0A0A8AC0, 1000000000000000, 1783488188, 11850158, "https://second-claim.example", true)
+```
 
-| Error | Cause | Fix |
-|---|---|---|
-| `SymbolRegistry not configured for <network>` | Address missing | Deploy first |
-| `execution reverted` | RPC or contract issue | Check explorer; the call is read-only and should not revert |
-| Empty response | RPC timeout | Retry; if persistent, try a different RPC URL |
+**Error / Edge cases**
 
-> **Agent Guidelines**:
-> 1. This is a read-only call — no private key needed.
-> 2. Always run this **before** `register_symbol.sh` to surface existing claims to the user.
-> 3. Include the `claimer` address and `projectURI` (if any) in the user-facing reply so they can decide whether to negotiate.
+- Returns a zero-valued tuple (`0x0000000000000000000000000000000000000000, 0, 0, 0, "", false`) for unclaimed symbols. Always run `isClaimed()` first to distinguish "never claimed" from "released".
 
 ---
 
-## Release a Claim and Refund the Deposit
+## Count active claims by address
 
-### Overview
-Cancels the caller's active claim and refunds the deposit in full. Only the
-original claimer can release their own claim.
+`cast call 0x6A9Eb713a8055d6ee46aD01641021255f62E6190 "activeClaimCountOf(address)(uint256)" "0xADDRESS" --rpc-url https://rpc.pharos.xyz`
 
-### Command Template
+**Parameters**
+
+| Name | Type | Description |
+|---|---|---|
+| claimer | address | The wallet address to inspect |
+
+**Returns** `uint256` — the number of currently active claims held by that address.
+
+**Output**
+
+```
+1
+```
+
+**Error / Edge cases**
+
+- This counts only active claims. Released claims do not appear in the count.
+
+---
+
+## Query registry balance
+
+`cast call 0x6A9Eb713a8055d6ee46aD01641021255f62E6190 "totalHeld()(uint256)" --rpc-url https://rpc.pharos.xyz`
+
+**Parameters** — none.
+
+**Returns** `uint256` — the sum of all currently active deposits held by the registry, in wei.
+
+**Output**
+
+```
+1000000000000000 [1e15]
+```
+
+(0.001 PHRS / PROS, formatted by Foundry in scientific notation. The raw wei value is on the left.)
+
+**Error / Edge cases**
+
+- Funds returned to a claimer via `release()` are removed from this total.
+- The contract's owner can also `emergencyWithdrawal()` all funds, but only when the contract is paused.
+
+---
+
+## Register a symbol claim
+
+`cast send 0x6A9Eb713a8055d6ee46aD01641021255f62E6190 "register(string,string)" "MYTOK" "https://myproj.example" --value 0.001ether --private-key $PRIVATE_KEY --rpc-url https://rpc.pharos.xyz`
+
+**Parameters**
+
+| Name | Type | Description |
+|---|---|---|
+| symbol | string | The ASCII token symbol to claim (case-insensitive, whitespace-trimmed, ≤16 chars) |
+| projectURI | string | Any string URI (URL, IPFS CID, plain description). Can be empty. |
+
+**Payable** — the call MUST include `--value 0.001ether` (or more). The exact amount is locked and refundable on `release()`.
+
+**Returns** — the transaction hash on success.
+
+**Output**
+
+```
+transactionHash: "0x..."
+```
+
+**Error / Edge cases**
+
+- `BelowMinimumDeposit()` — value too low. Pass `--value 0.001ether` or higher.
+- `AlreadyClaimed()` — symbol is already actively claimed. Use `isClaimed()` first to check.
+- `PausedState()` — contract is paused; wait for owner to unpause.
+- On success, the cast command also emits a `SymbolRegistered(symbol, claimer, deposit, projectURI, timestamp, blockNumber)` event you can read back via `--json` and `cast receipt`.
+
+---
+
+## Release a claim and refund the deposit
+
+`cast send 0x6A9Eb713a8055d6ee46aD01641021255f62E6190 "release(string)" "MYTOK" --private-key $PRIVATE_KEY --rpc-url https://rpc.pharos.xyz`
+
+**Parameters**
+
+| Name | Type | Description |
+|---|---|---|
+| symbol | string | The ASCII symbol of the claim to release (must match the exact registered value, normalized) |
+
+**Returns** — the transaction hash on success.
+
+**Output**
+
+```
+transactionHash: "0x..."
+```
+
+The full deposit is transferred back to the original claimer. The claim is cleared.
+
+**Error / Edge cases**
+
+- `NotClaimed()` — symbol has no active claim.
+- `NotClaimer()` — caller is not the original claimer. Only the wallet that registered can release.
+- `PausedState()` — contract is paused.
+- `TransferFailed()` — refund send failed. Retry; if persistent, contact the owner via `emergencyWithdrawal()`.
+
+---
+
+## Owner-only operations
+
+These require the owner's private key. The current owner is `0xCC06503955C5808bCc6e285A868925cB0A0A8AC0`.
+
+### Pause new registrations
+
+`cast send 0x6A9Eb713a8055d6ee46aD01641021255f62E6190 "pause()" --private-key $PRIVATE_KEY --rpc-url https://rpc.pharos.xyz`
+
+Halts `register()` and `release()`. Read operations still work. Use during incident response or maintenance.
+
+### Unpause
+
+`cast send 0x6A9Eb713a8055d6ee46aD01641021255f62E6190 "unpause()" --private-key $PRIVATE_KEY --rpc-url https://rpc.pharos.xyz`
+
+Resumes normal operations.
+
+### Emergency withdrawal (owner-only)
+
+`cast send 0x6A9Eb713a8055d6ee46aD01641021255f62E6190 "emergencyWithdrawal()" --private-key $PRIVATE_KEY --rpc-url https://rpc.pharos.xyz`
+
+The owner sweeps ALL held funds to themselves. **Only callable while the contract is paused.** This is the global-refund escape hatch — once swept, individual claimers must contact the owner for refunds. Use only in extreme circumstances.
+
+---
+
+## Quick copy-paste
 
 ```bash
-bash scripts/release_symbol.sh SYMBOL --network mainnet|testnet
+RPC=https://rpc.pharos.xyz
+REG=0x6A9Eb713a8055d6ee46aD01641021255f62E6190
+
+# Read everything in one go:
+cast call $REG "isClaimed(string)(bool)" "SKP" --rpc-url $RPC
+cast call $REG "getClaim(string)((address,uint256,uint64,uint64,string,bool))" "SKP" --rpc-url $RPC
+cast call $REG "activeClaimCountOf(address)(uint256)" "$(cast wallet address --private-key $PRIVATE_KEY)" --rpc-url $RPC
+cast call $REG "totalHeld()(uint256)" --rpc-url $RPC
+
+# File a claim:
+cast send $REG "register(string,string)" "MYTOK" "https://myproj.example" \
+  --value 0.001ether --private-key $PRIVATE_KEY --rpc-url $RPC
+
+# Release a claim:
+cast send $REG "release(string)" "MYTOK" --private-key $PRIVATE_KEY --rpc-url $RPC
 ```
-
-### Parameters
-
-| Parameter | Type | Required | Description |
-|---|---|---|---|
-| `SYMBOL` | string | Yes | Symbol to release |
-| `--network` | string | Yes | `mainnet` or `testnet` |
-| `--rpc-url` | string | No | Override RPC URL |
-| `--private-key` | string | No | Sender key (default: `$PRIVATE_KEY`) |
-
-### Output Parsing
-
-| Field | Description |
-|---|---|
-| `txHash` | Release transaction hash |
-| `refund` | Amount refunded (in wei and PHRS/PROS) |
-| `explorer` | PharosScan link |
-
-### Error Handling
-
-| Error | Cause | Fix |
-|---|---|---|
-| `NotClaimed` (revert) | No active claim exists for this symbol | Run `query_registry.sh` first |
-| `NotClaimer` (revert) | Sender is not the original claimer | Use the wallet that originally registered |
-| `PausedState` (revert) | Contract paused | Wait for owner to unpause |
-| `TransferFailed` (revert) | Refund send failed (should not happen on Pharos) | Retry; if persistent, contact the contract owner |
-
-> **Agent Guidelines**:
-> 1. Always confirm with the user before releasing — the claim is forfeit.
-> 2. After success, show the explorer link and the new balance delta.
-
----
-
-## Query Claim History (Events)
-
-### Overview
-Reads the `SymbolRegistered` event log over a block range. Use this to audit
-who has claimed what on Pharos over time.
-
-### Command Template
-
-```bash
-bash scripts/registry_history.sh --network mainnet|testnet \
-  --from-block N --to-block N --format json
-```
-
-### Parameters
-
-| Parameter | Type | Required | Description |
-|---|---|---|---|
-| `--network` | string | Yes | `mainnet` or `testnet` |
-| `--from-block` | uint | No | Default: last 100,000 blocks |
-| `--to-block` | uint | No | Default: latest |
-| `--format` | string | No | `json` (default) or `txt` |
-
-### Output Parsing (JSON)
-
-```json
-{
-  "network": "mainnet",
-  "registryAddress": "0x...",
-  "fromBlock": 11000000,
-  "toBlock": 11100000,
-  "registrations": [
-    {
-      "symbolHash": "0x...",
-      "symbol": "USDC",
-      "claimer": "0x...",
-      "deposit": "1000000000000000",
-      "timestamp": 1778000000,
-      "blockNumber": 11000123,
-      "projectURI": "https://..."
-    }
-  ]
-}
-```
-
-### Error Handling
-
-| Error | Cause | Fix |
-|---|---|---|
-| `SymbolRegistry not configured` | Address missing | Deploy first |
-| RPC timeout on wide range | Public RPC rate limit | Narrow the block range or use a paid RPC |
-| Empty `registrations` | No claims in range | Widen the range |
-
-> **Agent Guidelines**:
-> 1. Use this for audits: "show all claims filed in the last week."
-> 2. Cross-reference `claimer` addresses with PSCD scanner output to see if a claim's owner is also an actual token deployer.
-
----
-
-## Combined PSCD + Registry Workflow
-
-When a user asks "is `SYMBOL` safe to launch on Pharos?", the agent should
-combine both surfaces in one response:
-
-1. **Scan** — `bash scripts/check.sh SYMBOL --max-blocks 100000 --format json`
-   → returns existing ERC-20 mints with the symbol
-2. **Registry check** — `bash scripts/query_registry.sh SYMBOL --network mainnet`
-   → returns any active on-chain claim
-3. **Reply**: report both. If scanner says COLLISION → "DO NOT launch this
-   symbol, an existing token already uses it." If registry says claimed by
-   someone else → "Someone else has already filed a claim; consider a
-   different symbol or negotiate."
-4. **If both clear** → "Safe to launch. Optionally, file an on-chain claim
-   via `register_symbol.sh` to lock your intent."
-
-This is the value-add of the dual-surface skill: off-chain reality
-(deployed ERC-20s) + on-chain intent (registry claims), surfaced through
-one Steward Agent invocation.
