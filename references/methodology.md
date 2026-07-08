@@ -1,99 +1,153 @@
-# PSCD Methodology
+# Off-Chain Symbol Scanner
 
-## How symbol collisions are detected
+> The off-chain scanner (`scripts/check.sh`) walks Pharos mainnet (or testnet)
+> via Foundry/cast to find ERC-20 tokens whose on-chain `symbol()` matches a
+> candidate. This is the read-only counterpart to the on-chain
+> `SymbolRegistry` (see `references/registry.md`).
+>
+> **Network Configuration**: RPC URLs and chain IDs are read from
+> `assets/networks.json`. The scanner defaults to `mainnet` (Pacific, chain
+> 1672) and falls back to `atlantic-testnet` (chain 688689) with `--network testnet`.
+>
+> **No private key required** — the scanner is purely read-only.
+>
+> **Range limit**: the Pharos public RPC rejects `eth_getLogs` calls covering
+> more than 1,000 blocks. The script auto-batches into 1,000-block windows.
 
-### 1. Candidate token discovery
+---
 
-PSCD walks the Pharos Pacific mainnet block range `[from_block, to_block]` in batches of 1,000 blocks. For each batch, it calls:
+## Scan a Symbol for Collisions
+
+### Overview
+Walks a block range, collects every ERC-20 contract that emitted a
+Transfer-from-zero event, queries `symbol()` on each, and reports any match
+against the candidate.
+
+### Command Template
+
+```bash
+bash scripts/check.sh SYMBOL [options]
+```
+
+### Parameters
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `SYMBOL` | string | Yes | Candidate symbol to check (1–32 chars). Case-insensitive, whitespace-stripped. |
+| `--network` | string | No | `mainnet` (default) or `testnet` |
+| `--max-blocks N` | int | No | Scan only the last N most-recent blocks (overrides `--from-block`/`--to-block`) |
+| `--from-block N` | int | No | Explicit start block (default: 0) |
+| `--to-block N` | int | No | Explicit end block (default: latest) |
+| `--step N` | int | No | Blocks per `eth_getLogs` batch (default 1000, capped at 1000 by the RPC) |
+| `--workers N` | int | No | Parallel `eth_call` workers for symbol/name/decimals lookup (default 6) |
+| `--format FMT` | string | No | Output format: `md` (default), `json`, `txt` |
+| `--quiet` | flag | No | Suppress progress on stderr |
+| `--demo` | flag | No | Quick demo: `USDC` on last 5,000 blocks |
+| `-h`, `--help` | flag | No | Show help |
+
+### Output Parsing
+
+JSON output (`--format json`):
 
 ```json
 {
-  "method": "eth_getLogs",
-  "params": [{
-    "fromBlock": "0x...",
-    "toBlock":   "0x...",
-    "topics": [
-      "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
-      "0x0000000000000000000000000000000000000000000000000000000000000000"
-    ]
-  }]
+  "network": "mainnet",
+  "chainId": 1672,
+  "rpc": "https://rpc.pharos.xyz",
+  "candidate": "USDC",
+  "normalized": "usdc",
+  "from_block": 9596769,
+  "to_block": 9606769,
+  "blocks": 10001,
+  "tokens_seen": 5,
+  "verdict": "COLLISION",
+  "verdict_msg": "1 token(s) on mainnet use the symbol 'USDC'",
+  "collisions": [
+    {
+      "address": "0xc879c018db60520f4355c26ed1a6d572cdac1815",
+      "symbol": "USDC",
+      "name": "USDC",
+      "decimals": 6,
+      "ok": true,
+      "explorer": "https://www.pharosscan.xyz/token/0xc879c018db60520f4355c26ed1a6d572cdac1815"
+    }
+  ]
 }
 ```
 
-- `topic[0]` = keccak256 of `Transfer(address,address,uint256)` — the canonical ERC-20 event
-- `topic[1]` = `0x000…0` (zero address) — the `from` field of a Transfer-from-zero, which only happens at token mint
+`verdict` is one of:
 
-This filters server-side to just mint events. Each log's `address` field is the emitting contract (i.e. the token). We collect the unique set across all batches.
-
-### 2. Symbol/name/decimals lookup
-
-For each unique token address, three parallel `eth_call` requests:
-
-| Function | Selector | Returns |
-|---|---|---|
-| `symbol()` | `0x95d89b41` | string |
-| `name()`   | `0x06fdde03` | string |
-| `decimals()` | `0x313ce567` | uint8 |
-
-The 32-byte ABI-encoded return values are decoded in the Python client:
-
-- **string** = `[offset(32)][length(32)][bytes(length)]`
-- **uint8** = `0x00…XX` (last byte is the value)
-
-### 3. Normalization
-
-Both the candidate and the on-chain `symbol()` are normalized before comparison:
-
-```python
-normalize(s) = s.strip().upper()
-```
-
-This means:
-- `"usdc"` and `"USDC"` are identical
-- `"  USDC  "` and `"USDC"` are identical
-- Unicode case folding is NOT performed (Python's `.upper()` handles ASCII only by default; we keep it simple to avoid locale issues)
-
-### 4. Matching
-
-For each normalized on-chain symbol, compare against the normalized candidate. If equal, that token is a **collision candidate**. All collisions are returned.
-
-### 5. Verdict
-
-| Verdict | When |
+| Verdict | Meaning |
 |---|---|
-| `CLEAR` | `tokens_seen > 0` and zero matches |
-| `COLLISION` | one or more matches |
-| `EMPTY` | candidate is empty / whitespace-only |
+| `CLEAR` | `tokens_seen > 0` and zero collisions in the range |
+| `COLLISION` | One or more collisions found |
+| `EMPTY` | Candidate symbol was empty / whitespace-only (script rejects before running) |
 
-## Limitations
+### Error Handling
 
-### Tokens not detected
+| Error | Cause | Fix |
+|---|---|---|
+| `cast: command not found` | Foundry not installed | `curl -L https://foundry.paradigm.xyz \| bash && foundryup` |
+| `--max-blocks` and `--from-block` both given | Mutually exclusive | Pass one or the other |
+| `--format yaml` (or any value other than md/json/txt) | Invalid format | Use one of `md`, `json`, `txt` |
+| `--max-blocks abc` | Non-numeric value | Pass a positive integer |
+| `--from-block 100 --to-block 50` | Reversed range | Swap them so `from <= to` |
+| `unknown network 'foo'` | Network not in `assets/networks.json` | Use `mainnet` or `testnet`, or add the network to the JSON |
+| RPC error | Pharos RPC unreachable / rate-limited | Retry, or supply `--rpc-url` to a paid RPC |
 
-- **Factory-created tokens** (e.g. Uniswap-V2-style pair tokens, custom launchpads) that don't emit their own `Transfer` event won't be found. They appear as nested logs inside the parent factory's logs but with the factory as the emitter.
-- **Upgradeable proxy tokens** — the proxy's address emits the events, not the implementation. PSCD will find the proxy address, and `symbol()` will be called on the proxy (which delegates to the implementation), so it still works. But the *implementation* contract is what the explorer shows; the user should be aware that the proxy address is the correct one.
-- **Tokens deployed before the first scanned block** — out of scope, by design.
-- **Tokens with no `symbol()` function** (e.g. some NFTs) — `eth_call` reverts, the contract is skipped, no error reported in the final output.
+> **Agent Guidelines**:
+> 1. **No private key required** for this command — it's read-only.
+> 2. For a thorough pre-launch check, use `--max-blocks 100000` (≈56 hours on Pharos's 2s blocks) or wider.
+> 3. For fast interactive demos, use `--demo` (≈5s, last 5K blocks).
+> 4. Always use `--format json` for agent-to-agent integration. Use `--format md` only for human-readable display.
+> 5. `--quiet` silences stderr progress; keep stdout (the JSON) intact. Agents should always use `--quiet` to avoid polluting downstream parsers.
 
-### Symbol comparison limitations
+---
 
-- **Exact match only.** `USDC.e` vs `USDC` are different. `USDC` vs `USDс` (Cyrillic с) are different (whitelisted Unicode is not handled).
-- **Case folding is ASCII-only.** Some Latin-extended letters may not match across cases.
-- **Whitespace inside the symbol** is not stripped (e.g. `"US DC"` would not match `"USDC"`).
+## Detection Algorithm (Internal)
 
-### Performance
+This section is for **understanding the result**, not for invoking the script.
 
-| Range | RPC calls | Wall time |
-|---|---:|---:|
-| 1,000 blocks | ~1 | ~1s |
-| 10,000 blocks | ~10 | ~10s |
-| 100,000 blocks | ~100 | ~100s |
-| Full mainnet (~9.6M blocks) | ~9,600 | ~3 min |
+### Step 1 — Candidate token discovery
+Walk the block range in 1,000-block windows. For each window, call `eth_getLogs` with:
+- `topic[0]` = `keccak256("Transfer(address,address,uint256)")` = `0xddf252ad...`
+- `topic[1]` = `0x000…0` (zero address) — `from` field of a Transfer-from-zero, which only happens at token mint
 
-For each unique token, 3 more `eth_call` requests are made (parallelized, 6 workers). On Pharos mainnet, ~5-50 unique tokens are seen per 50k blocks (very few tokens are deployed compared to e.g. Ethereum).
+Filter server-side to just mint events. Collect unique emitting contracts.
 
-## Future improvements
+### Step 2 — Symbol/name/decimals lookup
+For each unique token, call `cast call <addr> "symbol()(string)"` (and `name()`, `decimals()`) in parallel using `xargs -P`. The script emits one row per token, then filters to collisions in pure bash (case-insensitive, whitespace-stripped).
 
-- **`eth_getCode` pre-filter:** skip contracts that don't have any bytecode in the standard ERC-20 range. Saves a few `eth_call` reverts.
-- **Contract creation receipts:** also walk `eth_getBlockByNumber(n, true)` for `transactions.to == null` and grab `receipt.contractAddress` from those. This catches tokens deployed without a public mint.
-- **Bridge detection:** cross-reference collision addresses against known bridge contracts (LayerZero, Wormhole, etc.) and tag them.
-- **Time-of-deployment:** show when each collision was first deployed, so the user can see if the collision predates their own project.
+### Step 3 — Normalization
+Both the candidate and the on-chain `symbol()` are normalized before comparison:
+- `tr '[:upper:]' '[:lower:]'` for case
+- `tr -d '[:space:]'` for whitespace
+
+So `usdc`, `USDC`, and ` USDC ` all match the same slot.
+
+### Step 4 — Verdict
+| Verdict | Condition |
+|---|---|
+| `CLEAR` | `tokens_seen > 0` AND `collisions == 0` |
+| `COLLISION` | `collisions >= 1` |
+
+A `CLEAR` result is a positive signal — no token in the scanned range uses the symbol. It is **not** a guarantee of uniqueness across the entire chain.
+
+### Limitations
+
+- **Tokens not detected by the scanner**:
+  - Factory-created tokens that don't emit their own `Transfer` event (e.g. tokens created via a factory's `create2` won't be the `address` field of the log)
+  - Tokens deployed without a public mint (no Transfer-from-zero event)
+  - Upgradeable proxy tokens (the proxy address will be found, but the implementation is what the explorer shows)
+  - Tokens with no `symbol()` function (`eth_call` reverts and the address is skipped)
+- **Symbol comparison is exact-match, ASCII only.** `USDC.e` ≠ `USDC`. `USDC` ≠ `USDС` (Cyrillic). Whitespace inside the symbol is not stripped.
+- **CLEAR is range-bounded.** Scanning only the last 5K blocks can miss old tokens. For pre-launch confidence, use `--max-blocks 100000` or scan the full chain.
+- **The Pharos public RPC has a 1,000-block limit per `eth_getLogs` call** — the script auto-batches, but a paid RPC is recommended for very wide ranges.
+
+### What's NOT covered
+
+- ❌ ERC-721 / ERC-1155 NFT collections (Transfer event signature differs)
+- ❌ Off-chain impersonators (Twitter handles, websites)
+- ❌ Whether a collision is a scam or a legitimate bridged token (you must verify the source on PharosScan)
+
+For on-chain claim recording (deposit + timestamp + intent), use `references/registry.md` instead.
