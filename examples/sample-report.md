@@ -1,225 +1,249 @@
 # PSCD Sample Reports
 
-This file shows real example outputs from the on-chain `SymbolRegistry`
-contract on Pharos Pacific mainnet. Every example is a single direct
-`cast` invocation against the deployed contract.
+This file shows real example outputs from the off-chain scanner. Every
+example is a `bash scripts/check.sh` invocation against the public Pharos
+RPC — no contract, no private key, no on-chain registry.
 
-**Deployed contract:** `SymbolRegistry = 0x6A9Eb713a8055d6ee46aD01641021255f62E6190`
 **Network:** Pharos Pacific mainnet (chain 1672), RPC `https://rpc.pharos.xyz`
 
 ---
 
-## 1. Check a candidate symbol that IS claimed
-
-```
-User: "Is `SKP` safe to launch on Pharos?"
-Agent: invokes Pharos Symbol Collision Detector Service Agent
-```
-
-### Step 1 — Check if claimed
-
-```bash
-cast call 0x6A9Eb713a8055d6ee46aD01641021255f62E6190 \
-  "isClaimed(string)(bool)" "SKP" \
-  --rpc-url https://rpc.pharos.xyz
-```
-
-### Output
-
-```
-true
-```
-
-### Step 2 — Get the full claim record
-
-```bash
-cast call 0x6A9Eb713a8055d6ee46aD01641021255f62E6190 \
-  "getClaim(string)((address,uint256,uint64,uint64,string,bool))" "SKP" \
-  --rpc-url https://rpc.pharos.xyz
-```
-
-### Output
-
-```
-(0xCC06503955C5808bCc6e285A868925cB0A0A8AC0, 1000000000000000, 1783488188, 11850158, "https://second-claim.example", true)
-```
-
-Fields decoded:
-| Field | Value |
-|---|---|
-| claimer | `0xCC06503955C5808bCc6e285A868925cB0A0A8AC0` |
-| deposit | `1000000000000000` wei = 0.001 PROS |
-| timestamp (unix) | `1783488188` |
-| blockNumber | `11850158` |
-| projectURI | `https://second-claim.example` |
-| active | `true` |
-
-### What the agent should reply to the user
-
-> **SKP is already claimed on the Pharos SymbolRegistry.**
-> Active claimer: `0xCC06...`
-> Deposit: 0.001 PROS
-> Filed at unix `1783488188` (block `11850158`)
-> Project URI: `https://second-claim.example`
->
-> **This does NOT prevent you from deploying an ERC-20 with the ticker `SKP`** —
-> Pharos does not enforce ticker uniqueness, and PSCD is a visibility layer, not
-> a deployment gate. The existing claim will be publicly visible to anyone who
-> checks before interacting with your contract.
->
-> Pick a different symbol (e.g. `SKP2`, `SKPX`, `SKP-PROJ`) before launching.
-
----
-
-## 2. Check a candidate symbol that is NOT claimed
+## 1. CLEAR — a nonsense symbol with no collisions
 
 ```
 User: "Is `ZZPSCDTEST` safe to launch on Pharos?"
 ```
 
-### Step 1 — Check if claimed
+### Command
 
 ```bash
-cast call 0x6A9Eb713a8055d6ee46aD01641021255f62E6190 \
-  "isClaimed(string)(bool)" "ZZPSCDTEST" \
-  --rpc-url https://rpc.pharos.xyz
+bash scripts/check.sh ZZPSCDTEST --network mainnet
 ```
 
-### Output
+### Output (excerpt)
 
+```markdown
+# Symbol Collision Report: ZZPSCDTEST
+
+- Network:    Pharos Pacific mainnet (chain 1672)
+- RPC:        https://rpc.pharos.xyz
+- Range:      blocks 0 → 11,978,422
+- Tokens seen: 8,723
+- Verdict:    **CLEAR**
+- Collisions: 0
+
+## Result
+
+No ERC-20 on Pharos Pacific mainnet uses the symbol `ZZPSCDTEST`. The
+symbol appears to be safe to launch.
 ```
-false
-```
-
-### Step 2 — (Optional) Get claim record
-
-```bash
-cast call 0x6A9Eb713a8055d6ee46aD01641021255f62E6190 \
-  "getClaim(string)((address,uint256,uint64,uint64,string,bool))" "ZZPSCDTEST" \
-  --rpc-url https://rpc.pharos.xyz
-```
-
-### Output
-
-```
-(0x0000000000000000000000000000000000000000, 0, 0, 0, "", false)
-```
-
-The zero-valued tuple confirms the symbol is **not registered**. The user is free to file a claim.
-
-### What the agent should reply
-
-> **ZZPSCDTEST is currently unclaimed on the Pharos SymbolRegistry.** You can proceed to register it if you want to lock in an on-chain first-mover marker.
-
-### Step 3 — (Optional) Register the claim
-
-After the user confirms the network (Pacific mainnet, $PRIVATE_KEY is set, balance checked):
-
-```bash
-cast send 0x6A9Eb713a8055d6ee46aD01641021255f62E6190 \
-  "register(string,string)" "ZZPSCDTEST" "https://your-project.example" \
-  --value 0.001ether \
-  --private-key $PRIVATE_KEY \
-  --rpc-url https://rpc.pharos.xyz
-```
-
-### Output
-
-```
-transactionHash: "0xabcd1234..."
-```
-
-The 0.001 PROS deposit is locked. The user can release it at any time via `release(string)` for a full refund.
 
 ---
 
-## 3. Release a claim and refund the deposit
+## 2. COLLISION — `USDC` is already taken
 
 ```
-User: "I want to release my SKP claim and get my deposit back."
+User: "Is `USDC` safe to launch on Pharos?"
 ```
 
-### Step 1 — Confirm the calling wallet is the original claimer
+### Command
 
 ```bash
-cast call 0x6A9Eb713a8055d6ee46aD01641021255f62E6190 \
-  "getClaim(string)((address,uint256,uint64,uint64,string,bool))" "SKP" \
-  --rpc-url https://rpc.pharos.xyz
+bash scripts/check.sh USDC --network mainnet
 ```
 
-### Output
+### Output (excerpt)
 
-```
-(0xCC06503955C5808bCc6e285A868925cB0A0A8AC0, 1000000000000000, 1783488188, 11850158, "https://second-claim.example", true)
+```markdown
+# Symbol Collision Report: USDC
+
+- Network:    Pharos Pacific mainnet (chain 1672)
+- RPC:        https://rpc.pharos.xyz
+- Range:      blocks 0 → 11,978,422
+- Tokens seen: 8,723
+- Verdict:    **COLLISION**
+- Collisions: 1
+
+## COLLISION 1/1
+
+| Field | Value |
+|---|---|
+| Address | 0xc879c018db60520f4355c26ed1a6d572cdac1815 |
+| Symbol | USDC |
+| Name | USDC |
+| Decimals | 6 |
+| Total supply | 6,458,898.643751 |
+| Holders | 17,388 |
+| Explorer | https://www.pharosscan.xyz/token/0xc879c018db60520f4355c26ed1a6d572cdac1815 |
+
+## Recommendation
+
+USDC is already in use on Pharos Pacific mainnet. Do not deploy a new
+ERC-20 with the ticker USDC — wallets and explorers will display both
+identically and end users will be unable to distinguish them. Pick a
+different symbol: `USDC2`, `USDCX`, `USDC-PROJ`, etc.
 ```
 
-Confirm `0xCC065039...` matches the wallet derived from `$PRIVATE_KEY`:
+### Same query as JSON
 
 ```bash
-cast wallet address --private-key $PRIVATE_KEY
+bash scripts/check.sh USDC --network mainnet --format json
 ```
 
-If the addresses match, proceed with the release. If not, inform the user they need to use the wallet that originally registered.
-
-### Step 2 — Release
-
-```bash
-cast send 0x6A9Eb713a8055d6ee46aD01641021255f62E6190 \
-  "release(string)" "SKP" \
-  --private-key $PRIVATE_KEY \
-  --rpc-url https://rpc.pharos.xyz
+```json
+{
+  "network": "mainnet",
+  "chainId": 1672,
+  "rpc": "https://rpc.pharos.xyz",
+  "candidate": "USDC",
+  "normalized": "usdc",
+  "from_block": 0,
+  "to_block": 11978422,
+  "tokens_seen": 8723,
+  "verdict": "COLLISION",
+  "verdict_msg": "1 token(s) on mainnet use the symbol 'USDC'",
+  "collisions": [
+    {
+      "address": "0xc879c018db60520f4355c26ed1a6d572cdac1815",
+      "symbol": "USDC",
+      "name": "USDC",
+      "decimals": 6,
+      "total_supply": "6458898643751",
+      "holders": 17388,
+      "ok": true,
+      "explorer": "https://www.pharosscan.xyz/token/0xc879c018db60520f4355c26ed1a6d572cdac1815"
+    }
+  ]
+}
 ```
-
-### Output
-
-```
-transactionHash: "0xdef45678..."
-```
-
-### Verify the release
-
-```bash
-cast call 0x6A9Eb713a8055d6ee46aD01641021255f62E6190 \
-  "isClaimed(string)(bool)" "SKP" \
-  --rpc-url https://rpc.pharos.xyz
-```
-
-### Output
-
-```
-false
-```
-
-The deposit is refunded in full to the original claimer; the claim record is cleared.
 
 ---
 
-## 4. Read-only inspection
+## 3. COLLISION — `SUP` (a low-cap token with 1 holder)
 
 ```
-User: "How many active claims does my wallet have? How much PROS is the registry holding?"
+User: "Is `SUP` taken on Pharos?"
 ```
 
-```bash
-MY_ADDR=$(cast wallet address --private-key $PRIVATE_KEY)
-
-cast call 0x6A9Eb713a8055d6ee46aD01641021255f62E6190 \
-  "activeClaimCountOf(address)(uint256)" "$MY_ADDR" \
-  --rpc-url https://rpc.pharos.xyz
-```
-
-```
-3
-```
+### Command
 
 ```bash
-cast call 0x6A9Eb713a8055d6ee46aD01641021255f62E6190 \
-  "totalHeld()(uint256)" \
-  --rpc-url https://rpc.pharos.xyz
+bash scripts/check.sh SUP --network mainnet
 ```
 
-```
-1000000000000000 [1e15]
+### Output (excerpt)
+
+```markdown
+# Symbol Collision Report: SUP
+
+- Network:    Pharos Pacific mainnet (chain 1672)
+- RPC:        https://rpc.pharos.xyz
+- Range:      blocks 0 → 11,978,422
+- Tokens seen: 8,723
+- Verdict:    **COLLISION**
+- Collisions: 1
+
+## COLLISION 1/1
+
+| Field | Value |
+|---|---|
+| Address | 0x4c70919472b8fe53924fada6a562cd95089631b2 |
+| Symbol | SUP |
+| Name | SHUTUP |
+| Decimals | 18 |
+| Total supply | 100,000,000 |
+| Holders | 1 |
+| Explorer | https://www.pharosscan.xyz/token/0x4c70919472b8fe53924fada6a562cd95089631b2 |
+
+## Recommendation
+
+SUP is already in use on Pharos Pacific mainnet. The existing contract
+(`SHUTUP`) has 1 holder and 100M total supply — it may be a personal or
+test deployment, but a competing ERC-20 with the same ticker will be
+visually indistinguishable in wallets and explorers. Pick a different
+symbol before launching.
 ```
 
-(The wei value `1000000000000000` is 0.001 PROS.)
+This is the canonical case where PSCD earns its keep: even an obscure
+"1-holder" token with a non-matching name (`SHUTUP` vs `SUP`) is detected
+and reported, with explorer link + recommendations.
+
+---
+
+## 4. Bounded scan — last 50,000 blocks
+
+```
+User: "Has anyone launched a token called `NEWCOIN` in the last 50k blocks?"
+```
+
+### Command
+
+```bash
+bash scripts/check.sh NEWCOIN --network mainnet --max-blocks 50000
+```
+
+### Output (excerpt)
+
+```markdown
+# Symbol Collision Report: NEWCOIN
+
+- Network:    Pharos Pacific mainnet (chain 1672)
+- RPC:        https://rpc.pharos.xyz
+- Range:      blocks 11,928,422 → 11,978,422 (last 50,000)
+- Tokens seen: 1,234
+- Verdict:    **CLEAR**
+- Collisions: 0
+
+## Result
+
+No ERC-20 in the last 50,000 blocks uses the symbol `NEWCOIN`. Note:
+this is a bounded scan; tokens deployed before block 11,928,422 are not
+included. Run a full-chain scan to be exhaustive.
+```
+
+---
+
+## 5. Testnet check
+
+```
+User: "I want to test launch `MYTKN` on testnet. Is it free?"
+```
+
+### Command
+
+```bash
+bash scripts/check.sh MYTKN --network testnet
+```
+
+The script auto-resolves to the Atlantic testnet RPC
+(`https://atlantic.dplabs-internal.com`) and chain ID 688689. Same
+algorithm, just a different chain.
+
+---
+
+## 6. Recent deployment history
+
+```
+User: "What has launched on Pharos in the last 100k blocks?"
+```
+
+### Command
+
+```bash
+bash scripts/registry_history.sh --network mainnet --since-block 11878422
+```
+
+### Output (excerpt)
+
+```text
+TICKER                          FIRST_BLOCK    COUNT    SAMPLE
+USDC                            11234567       1        0xc879c0...
+SUP                             11850158       1        0x4c7091...
+PROS                            11000000       1        0x52c48d...
+DLP                             11700000+      5        0x5c8367...
+UNI-V2                          11800000+      2        0xea3871...
+... (8,723 rows total)
+```
+
+Useful for "show me what just launched" without checking each one
+individually.

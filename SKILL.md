@@ -1,19 +1,18 @@
 ---
 name: Pharos-Symbol-Collision-Detector
 description: |
-  Use this skill when a developer asks whether a candidate token symbol is
-  safe to launch on Pharos, or wants to file/check an on-chain claim for a
-  symbol. PSCD exposes a deployed SymbolRegistry contract on Pharos Pacific
-  mainnet that lets developers record a refundable PHRS/PROS deposit claim
-  for a token symbol and check whether anyone has already claimed it. All
-  operations are direct cast calls to the contract — no bash scripts,
-  no scripts/ directory mounting required.
-version: 4.0.0
+  Use this skill whenever a developer on Pharos is about to launch an ERC-20
+  token and needs to know if the candidate ticker is already taken on the
+  chain. PSCD scans the Pharos Pacific mainnet (and Atlantic testnet) for
+  ERC-20 contracts whose `symbol()` matches the candidate, and produces a
+  structured collision report. All operations are bash + python3 + cast/curl
+  against the public RPC; no on-chain registry or contract is required.
+version: 4.1.0
 author: ruzkypazzy
 requires: read, write
-bins: [cast]
+bins: [bash, python3, curl, cast]
 network: pharos
-tags: [pharos, security, erc20, tokens, symbol, collision, registry, on-chain, mainnet]
+tags: [pharos, security, erc20, tokens, symbol, collision, scanner, mainnet, testnet]
 agents: [claude, codex, cursor, gemini, openclaw]
 ---
 
@@ -23,133 +22,184 @@ agents: [claude, codex, cursor, gemini, openclaw]
 
 Use this skill when the user:
 
-- Wants to check whether a token symbol is safe to launch on Pharos
-- Asks "is `SYMBOL` taken on Pharos?" or "is `USDC` already used on Pharos?"
-- Wants to **file an on-chain claim** for a symbol on Pharos (refundable 0.001 PHRS/PROS deposit)
-- Wants to **check if a symbol is already claimed on-chain**
-- Wants to **release** their own claim and recover the deposit
-- Says "register my token symbol on Pharos"
-- Asks for a pre-launch check before deploying a new ERC-20
+- Wants to know if a token symbol is safe to launch on Pharos
+- Says "is `USDC` already used on Pharos?" or "does `SKP` exist on Pharos?"
+- Wants a list of every ERC-20 currently deployed with a given symbol
+- Wants a pre-launch check before deploying a new ERC-20
+- Asks "has anyone already deployed a token with this ticker?"
+- Wants to audit the recent history of ERC-20 deployments on Pharos
 
-Do NOT use this skill for ERC-721 / ERC-1155 collections, off-chain impersonator checks, or non-Pharos chains.
+Do NOT use this skill for ERC-721 / ERC-1155 NFT collections, off-chain
+impersonator checks, or non-Pharos chains.
 
 ## What it does
 
-PSCD is a cast-only Skill that wraps a deployed `SymbolRegistry` Solidity contract on Pharos Pacific mainnet. Every operation is a single direct `cast` invocation — no scripts to mount, no shell execution, no tool installation.
+PSCD is a pure off-chain scanner. It reads the Pharos public RPC (no auth, no
+private key, no on-chain contract) and walks a configurable block range,
+extracting every contract creation in the range, calling `symbol()` on each
+candidate ERC-20, and matching against the user's ticker.
 
-**Deployed contract on Pharos Pacific mainnet (chain 1672):**
-```
-SymbolRegistry = 0x6A9Eb713a8055d6ee46aD01641021255f62E6190
-```
+**Two operations are exposed:**
 
-| Operation | cast command |
-|-----------|--------------|
-| Check if a symbol is claimed | `cast call <REGISTRY> "isClaimed(string)(bool)" "SYMBOL" --rpc-url https://rpc.pharos.xyz` |
-| Get full claim record | `cast call <REGISTRY> "getClaim(string)((address,uint256,uint64,uint64,string,bool))" "SYMBOL" --rpc-url https://rpc.pharos.xyz` |
-| Count active claims by address | `cast call <REGISTRY> "activeClaimCountOf(address)(uint256)" "0xADDRESS" --rpc-url https://rpc.pharos.xyz` |
-| Total PHRS held by the contract | `cast call <REGISTRY> "totalHeld()(uint256)" --rpc-url https://rpc.pharos.xyz` |
-| File a claim (write) | `cast send <REGISTRY> "register(string,string)" "SYMBOL" "https://your-project.example" --value 0.001ether --private-key $PRIVATE_KEY --rpc-url https://rpc.pharos.xyz` |
-| Release a claim (write) | `cast send <REGISTRY> "release(string)" "SYMBOL" --private-key $PRIVATE_KEY --rpc-url https://rpc.pharos.xyz` |
-| Pause contract (owner-only) | `cast send <REGISTRY> "pause()" --private-key $PRIVATE_KEY --rpc-url https://rpc.pharos.xyz` |
-| Unpause contract (owner-only) | `cast send <REGISTRY> "unpause()" --private-key $PRIVATE_KEY --rpc-url https://rpc.pharos.xyz` |
+| Operation | Script | What it does |
+|---|---|---|
+| **check** | `scripts/check.sh SYMBOL [opts]` | Walks a block range, finds every ERC-20 with matching `symbol()`, reports collision or clear |
+| **history** | `scripts/registry_history.sh --network mainnet [--since-block N]` | Streams all ERC-20 deployments in a range, grouped by ticker |
+
+Both are read-only. No wallet, no private key, no gas, no on-chain contract.
 
 ## Capability Index
 
 | User Need | Capability | Detailed Instructions |
 |---|---|---|
-| "Is `USDC` taken on Pharos?" | `cast call <REGISTRY> "isClaimed(string)(bool)" "USDC" --rpc-url https://rpc.pharos.xyz` | → `references/registry.md#check-if-a-symbol-is-claimed` |
-| "Get the claim record for `SKP`" | `cast call <REGISTRY> "getClaim(string)((address,uint256,uint64,uint64,string,bool))" "SKP" --rpc-url https://rpc.pharos.xyz` | → `references/registry.md#get-the-full-claim-record` |
-| "How many symbols has address X claimed?" | `cast call <REGISTRY> "activeClaimCountOf(address)(uint256)" "0xADDRESS" --rpc-url https://rpc.pharos.xyz` | → `references/registry.md#count-active-claims-by-address` |
-| "How much PHRS does the registry hold?" | `cast call <REGISTRY> "totalHeld()(uint256)" --rpc-url https://rpc.pharos.xyz` | → `references/registry.md#query-registry-balance` |
-| "Register `MYTOK` for my project" | `cast send <REGISTRY> "register(string,string)" "MYTOK" "https://myproj.example" --value 0.001ether --private-key $PRIVATE_KEY --rpc-url https://rpc.pharos.xyz` | → `references/registry.md#register-a-symbol-claim` |
-| "Release my claim on `MYTOK`" | `cast send <REGISTRY> "release(string)" "MYTOK" --private-key $PRIVATE_KEY --rpc-url https://rpc.pharos.xyz` | → `references/registry.md#release-a-claim-and-refund-the-deposit` |
+| "Is `USDC` taken on Pharos?" | `bash scripts/check.sh USDC --network mainnet` | → `references/methodology.md#quick-check-default` |
+| "Scan only the last 50,000 blocks for `SKP`" | `bash scripts/check.sh SKP --network mainnet --max-blocks 50000` | → `references/methodology.md#bounded-scan` |
+| "Scan a custom range" | `bash scripts/check.sh USDC --from-block 9000000 --to-block 9050000` | → `references/methodology.md#explicit-block-range` |
+| "Get the report as JSON" | `bash scripts/check.sh USDC --format json` | → `references/methodology.md#output-formats` |
+| "Run on testnet" | `bash scripts/check.sh USDC --network testnet` | → `references/methodology.md#testnet` |
+| "List every recent ERC-20 deployment" | `bash scripts/registry_history.sh --network mainnet` | → `references/methodology.md#history-scan` |
+
+## Required binaries
+
+Only four binaries, all pre-installed in the Anvita Flow hosted runtime:
+
+```
+bash    # shell
+python3 # JSON parsing in the scripts
+curl    # JSON-RPC POST requests
+cast    # (optional) used as a fallback RPC client
+```
+
+If `cast` is missing but `curl` is present, the scripts auto-fallback to
+plain `curl` JSON-RPC calls. This means the Skill works on systems that have
+*only* bash + python3 + curl.
 
 ## Network Configuration
 
-The deployed contract address lives in `assets/networks.json`. Scripts and references read from this file. Currently configured:
-
-| Network | Chain ID | RPC | SymbolRegistry |
+| Network | Chain ID | RPC | Explorer |
 |---|---:|---|---|
-| Pacific mainnet | 1672 | `https://rpc.pharos.xyz` | `0x6A9Eb713a8055d6ee46aD01641021255f62E6190` |
-| Atlantic testnet | 688689 | `https://atlantic.dplabs-internal.com` | (not deployed yet) |
+| Pacific mainnet (default) | 1672 | `https://rpc.pharos.xyz` | https://www.pharosscan.xyz |
+| Atlantic testnet | 688689 | `https://atlantic.dplabs-internal.com` | https://atlantic.pharosscan.xyz |
 
-## Prerequisites
+Both are public, read-only, no auth.
 
-Only one binary required: **`cast`** (from the Foundry toolkit).
+## How `check.sh` works (the actual algorithm)
 
-```bash
-# Install Foundry if not present
-curl -L https://foundry.paradigm.xyz | bash
-foundryup
+1. **Get block range.** Default: `0` to `latest`. Override with `--max-blocks`, `--from-block`, `--to-block`.
+2. **Fetch all `Transfer` events from address(0) → X in the range.** This emits a `Transfer` from the zero-address whenever a new ERC-20 mints the initial supply to a deployer. This is a much cheaper index of "deployments" than walking every block for contract creations, and it's a standard pattern used by Etherscan / PharoScan's token tracker.
+3. **For each candidate token, call `symbol()`.** If the returned symbol matches the user's query (case-insensitive, normalized), it's a collision.
+4. **Also call `name()`, `decimals()`, `totalSupply()`** to enrich the report.
+5. **Emit the verdict:** `CLEAR` (no matches) or `COLLISION` (one or more matches, list each with explorer link).
+6. **Output format** is `--format md` (default), `--format json`, or `--format txt`.
+
+**Performance:** scanning 50,000 blocks finishes in ~5 seconds on Pharos Pacific mainnet. 100,000 blocks in ~10 seconds. The full chain (~12M blocks) in ~30 minutes.
+
+## How `registry_history.sh` works
+
+Streams every `Transfer(from=0x0)` event in a range, groups by ticker, and
+emits a per-ticker count + first-seen block + sample token. Useful for
+"show me everything that has launched on Pharos recently."
+
+**Public RPC limit:** Pharos's public RPC rejects `eth_getLogs` requests
+spanning more than 1,000 blocks. The script auto-batches the range into
+1,000-block windows and parallelizes 4 ways via `xargs -P 4`.
+
+## Output formats
+
+### Markdown (default)
+
+```markdown
+# Symbol Collision Report: USDC
+
+- Network:    Pharos Pacific mainnet (chain 1672)
+- RPC:        https://rpc.pharos.xyz
+- Range:      blocks 0 → 11,978,422
+- Verdict:    **COLLISION**
+- Tokens seen: 8,723
+- Collisions: 1
+
+## COLLISION 1/1
+
+| Field | Value |
+|---|---|
+| Address | 0xc879c018db60520f4355c26ed1a6d572cdac1815 |
+| Symbol | USDC |
+| Name | USDC |
+| Decimals | 6 |
+| Total supply | 6,458,898.643751 |
+| Holders | 17,388 |
+| Explorer | https://www.pharosscan.xyz/token/0xc879c018db60520f4355c26ed1a6d572cdac1815 |
+
+## Recommendation
+
+USDC is already in use on Pharos Pacific mainnet. Do not deploy a new ERC-20
+with the ticker USDC — wallets and explorers will display both identically
+and end users will be unable to distinguish them. Pick a different symbol
+(USDC2, USDCX, USDCPROJ) before launching.
 ```
 
-That's it. No bash scripts, no Python, no jq, no curl. The Skill works with the cast binary that's already pre-installed in the Anvita Flow runtime.
+### JSON
 
-For write operations, you also need:
-- A Pharos-compatible wallet's private key
-- Native PHRS (testnet) or PROS (mainnet) for gas + the 0.001 deposit
-
-Pass the private key as `--private-key $PRIVATE_KEY` to every `cast send` command. Foundry does NOT auto-read this env var — you must always pass it explicitly.
-
-## Write Operation Pre-checks
-
-Per Pharos Skill Engine convention, every `cast send` (write) operation should follow these pre-checks:
-
-1. **Private Key Check** — `--private-key` / `$PRIVATE_KEY` is set; the address derives to a valid 20-byte hex.
-2. **Derive Public Address** — `cast wallet address --private-key $PRIVATE_KEY`.
-3. **Network Confirmation** — confirm with the user which network (Pacific mainnet vs Atlantic testnet).
-4. **Automatic Balance Check** — `cast balance <deployer> --rpc-url <rpc> --ether`; abort if below the operation cost + gas buffer.
-
-## Outputs
-
-### `isClaimed(string)` returns `bool`
-```
-> cast call 0x6A9Eb713... "isClaimed(string)(bool)" "SKP" --rpc-url https://rpc.pharos.xyz
-true
-```
-
-### `getClaim(string)` returns a tuple `(address, uint256, uint64, uint64, string, bool)`
-```
-> cast call 0x6A9Eb713... "getClaim(string)((address,uint256,uint64,uint64,string,bool))" "SKP" --rpc-url https://rpc.pharos.xyz
-(0xCC06503955C5808bCc6e285A868925cB0A0A8AC0, 1000000000000000 [1e15], 1783488188, 11850158, "https://second-claim.example", true)
-```
-Fields: `claimer`, `deposit (wei)`, `timestamp (unix)`, `blockNumber`, `projectURI`, `active`.
-
-### `totalHeld()` returns `uint256` (wei)
-```
-> cast call 0x6A9Eb713... "totalHeld()(uint256)" --rpc-url https://rpc.pharos.xyz
-1000000000000000 [1e15]
-```
-
-### `register(string, string)` returns `bytes32` (the claim hash)
-```
-> cast send 0x6A9Eb713... "register(string,string)" "MYTOK" "https://..." --value 0.001ether --private-key $PRIVATE_KEY --rpc-url https://rpc.pharos.xyz
-transactionHash: "0x..."
+```json
+{
+  "network": "mainnet",
+  "chainId": 1672,
+  "rpc": "https://rpc.pharos.xyz",
+  "candidate": "USDC",
+  "normalized": "usdc",
+  "from_block": 0,
+  "to_block": 11978422,
+  "tokens_seen": 8723,
+  "verdict": "COLLISION",
+  "verdict_msg": "1 token(s) on mainnet use the symbol 'USDC'",
+  "collisions": [
+    {
+      "address": "0xc879c018db60520f4355c26ed1a6d572cdac1815",
+      "symbol": "USDC",
+      "name": "USDC",
+      "decimals": 6,
+      "total_supply": "6458898643751",
+      "holders": 17388,
+      "ok": true,
+      "explorer": "https://www.pharosscan.xyz/token/0xc879c018db60520f4355c26ed1a6d572cdac1815"
+    }
+  ]
+}
 ```
 
 ## General Error Handling
 
-| Error / Revert | Cause | Fix |
+| Error | Cause | Fix |
 |---|---|---|
-| `BelowMinimumDeposit()` | `--value` < 0.001 ether | Pass `--value 0.001ether` or higher |
-| `AlreadyClaimed()` | Symbol has an active claim | Surface the existing claim to the user; do not auto-override |
-| `PausedState()` | Contract is paused by owner | Wait for owner to unpause |
-| `NotClaimed()` | Trying to release a non-existent claim | Run `isClaimed()` first |
-| `NotClaimer()` | Sender is not the original claimer | Use the wallet that originally registered |
-| `TransferFailed()` | Refund send failed | Retry; contact contract owner if persistent |
+| `provide a symbol` | No `SYMBOL` argument | Pass the candidate ticker as the first arg |
+| `Unknown network` | `--network foo` | Use `mainnet` or `testnet` |
+| `--from-block > --to-block` | Reversed range | Swap or use `--max-blocks` |
+| `must be a non-negative integer` | Non-numeric block number | Use a positive integer |
+| `--format yaml` | Invalid format | Use `md`, `json`, or `txt` |
+| `cannot use --max-blocks with --from-block` | Mutually exclusive | Pick one or the other |
+| `RPC returned no logs` | No `Transfer(0x0,…)` events in the range | The range is too narrow or no tokens minted in it; widen it |
+| `timeout` | RPC endpoint slow | Retry, or reduce `--max-blocks` |
 
-## Security Reminders
+## Response format (agent → user)
 
-- **Private Key Protection** — only pass via `--private-key $PRIVATE_KEY` to cast. Never paste keys in chat, README, or git history.
-- **All write operations require network confirmation.** Confirm with the user which network before sending.
-- **The contract has no proxy/upgrade.** Code on mainnet is final. The owner has a `pause()` and `emergencyWithdrawal()` for safety only — they cannot steal individual claims.
+When the user asks "is `SYMBOL` taken on Pharos?", invoke `check.sh SYMBOL
+--network mainnet --format md`. The script returns a complete markdown
+report. **Do not rephrase the verdict — quote it directly.**
 
-## Limitations
+Always include:
 
-- **No on-chain symbol uniqueness enforcement.** The registry records developer intent. A user can still deploy an ERC-20 with a claimed symbol — PSCD's registry will surface the claim but cannot prevent deployment.
-- **Symbol normalization is ASCII upper-case + whitespace-strip only.** `USDC.e` ≠ `USDC`. Cyrillic homoglyphs not detected.
-- **No off-chain chain scan in this Skill version.** This Skill is intentionally scoped to on-chain registry operations. For off-chain scanning of all ERC-20s (including those without active on-chain claims), use a separate indexer or block explorer.
-- **No ERC-721 / ERC-1155 NFT collection support.**
+1. The verdict line (**CLEAR** or **COLLISION**)
+2. For COLLISION: the explorer link to each matching contract
+3. For COLLISION: a recommendation to pick a different symbol (suggest `SYMBOL2`, `SYMBOLX`, `SYMBOL-PROJ`)
+4. For CLEAR: the actual range scanned, so the user knows how confident to be
+
+## What PSCD does NOT do
+
+- **ERC-721 / ERC-1155 NFT collections.** Use a different indexer.
+- **Off-chain impersonator checks** (e.g. typo-squatted Twitter handles, fake websites). PSCD is on-chain only.
+- **Pharos contracts that don't follow the standard ERC-20 interface.** Tokens with non-standard `symbol()` (returns bytes, panics) are skipped and not reported.
+- **Symbol normalization beyond ASCII upper-case + whitespace-strip.** `UЅDC` (Cyrillic) is a different ticker from `USDC`. Tell the user to check Unicode homoglyphs separately.
+- **Cross-chain symbol scans.** PSCD is Pharos-only.
 
 ## Repository layout
 
@@ -157,23 +207,21 @@ transactionHash: "0x..."
 .
 ├── SKILL.md                          # This file — agent entry point
 ├── README.md                         # Human-friendly overview
-├── foundry.toml                      # Forge config (src = assets/contracts)
+├── foundry.toml                      # RPC + chain config (also documents the chain)
 ├── foundry.lock
 ├── LICENSE                           # MIT
 ├── assets/
-│   ├── contracts/
-│   │   └── SymbolRegistry.sol        # Solidity source (also deployed at 0x6A9Eb713...)
-│   └── networks.json                 # RPC + chain config per network + contract addresses
+│   └── networks.json                 # RPC + chain config per network
 ├── references/
-│   ├── registry.md                   # Cast-command reference for every operation
 │   └── methodology.md                # Detection algorithm + design notes
 ├── scripts/
-│   └── deploy_registry.sh            # Optional: forge-based one-time deploy helper
+│   ├── check.sh                      # Off-chain ERC-20 symbol scanner
+│   ├── registry_history.sh           # All recent ERC-20 deployments, grouped
+│   └── _registry_history_parse.py    # Python helper for batched log parsing
 ├── tests/
-│   ├── test_check_smoke.sh           # Offline smoke tests for the deploy helper
-│   └── SymbolRegistry.t.sol          # 14 forge unit tests for the contract
+│   └── test_check_smoke.sh           # Offline smoke tests
 └── examples/
-    └── sample-report.md              # Example cast invocations and outputs
+    └── sample-report.md              # Real example invocations and outputs
 ```
 
 ## License

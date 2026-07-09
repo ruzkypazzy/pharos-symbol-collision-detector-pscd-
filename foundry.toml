@@ -1,13 +1,16 @@
 [profile.default]
+# PSCD v4.1 — no Solidity contracts. This foundry.toml is preserved
+# only as a reference for the Anvita Flow runtime (it documents the
+# chain IDs and RPCs we interact with). The `src` field is intentionally
+# a non-existent directory; nothing in the Skill uses forge build.
+
 src = "assets/contracts"
 out = "out"
 libs = ["lib"]
-test = "tests"
 solc = "0.8.24"
 optimizer = true
 optimizer_runs = 200
 via_ir = false
-fs_permissions = [{ access = "read", path = "./assets" }]
 
 [fmt]
 line_length = 100
@@ -17,3 +20,12 @@ quote_style = "double"
 [rpc_endpoints]
 atlantic-testnet = "https://atlantic.dplabs-internal.com"
 mainnet = "https://rpc.pharos.xyz"
+
+[doc]
+# Network configuration
+#
+# mainnet      Pharos Pacific mainnet (chain 1672)         rpc=https://rpc.pharos.xyz
+# testnet      Pharos Atlantic testnet (chain 688689)      rpc=https://atlantic.dplabs-internal.com
+#
+# Both are JSON-RPC over HTTPS, no auth required for read-only calls.
+# Scripts in scripts/ read these values from assets/networks.json.

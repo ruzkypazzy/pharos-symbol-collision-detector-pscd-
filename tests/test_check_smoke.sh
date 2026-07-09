@@ -1,18 +1,20 @@
 #!/bin/bash
 # Smoke test for PSCD. Runs offline — no RPC calls.
 #
-# This Skill is cast-only. The remaining bash script (deploy_registry.sh) is
-# an OPTIONAL forge-based one-time deploy helper. It is NOT part of the
-# runtime surface that the Steward Agent invokes — every Skill operation is
-# a direct cast call against the already-deployed SymbolRegistry contract.
+# This Skill is a pure off-chain scanner: bash scripts + python3 + cast/curl,
+# talking to the public Pharos RPC. There is no on-chain registry, no Solidity
+# contract. The bash + python3 + cast stack is intentionally simple so the
+# Anvita Flow hosted runtime can mount it.
 #
 # What this script verifies:
-#   1. deploy_registry.sh argument validation
-#   2. SKILL.md + README.md + references/ exist and have content
-#   3. assets/contracts/SymbolRegistry.sol is syntactically valid Solidity
-#   4. assets/networks.json is valid JSON with the mainnet SymbolRegistry populated
-#   5. The SymbolRegistry compile output exists (forge build artifact)
-#   6. No stragglers from the old bash-skill era (no scripts/check.sh etc.)
+#   1. check.sh argument validation
+#   2. registry_history.sh argument validation
+#   3. SKILL.md + README.md + references/ exist and have content
+#   4. assets/networks.json is valid JSON, has mainnet + testnet entries,
+#      with no contract field (PSCD is index-only, no on-chain registry)
+#   5. No SETUP.md (rejected by Anvita Flow upload validator)
+#   6. python3 is available (required by scripts)
+#   7. The two core scripts are executable
 
 set -e
 
@@ -32,15 +34,49 @@ assert_grep() {
 }
 
 # ============================================================================
-# deploy_registry.sh -- the only remaining bash script
+# check.sh
 # ============================================================================
 echo ""
-echo "== deploy_registry.sh =="
+echo "== check.sh =="
 
-OUT=$(bash scripts/deploy_registry.sh 2>&1 || true)
+OUT=$(bash scripts/check.sh --help 2>&1)
+assert_grep "help shows usage"        "Usage:" "$OUT"
+assert_grep "help mentions scanner"   "Symbol Collision" "$OUT"
+
+OUT=$(bash scripts/check.sh 2>&1 || true)
+assert_grep "no symbol rejected"      "provide a symbol" "$OUT"
+
+OUT=$(bash scripts/check.sh USDC --network foo 2>&1 || true)
+assert_grep "bad network rejected"    "Unknown network" "$OUT"
+
+OUT=$(bash scripts/check.sh USDC --from-block 100 --to-block 50 2>&1 || true)
+assert_grep "reversed range rejected" "must be <=" "$OUT"
+
+OUT=$(bash scripts/check.sh USDC --bad-flag 2>&1 || true)
+assert_grep "unknown flag rejected"   "unknown flag" "$OUT"
+
+OUT=$(bash scripts/check.sh USDC --max-blocks abc 2>&1 || true)
+assert_grep "non-numeric rejected"    "must be a non-negative integer" "$OUT"
+
+OUT=$(bash scripts/check.sh USDC --format yaml 2>&1 || true)
+assert_grep "bad format rejected"     "must be md, json, or txt" "$OUT"
+
+OUT=$(bash scripts/check.sh USDC --max-blocks 100 --from-block 50 2>&1 || true)
+assert_grep "mutually exclusive flags" "cannot use --max-blocks with --from-block" "$OUT"
+
+# ============================================================================
+# registry_history.sh
+# ============================================================================
+echo ""
+echo "== registry_history.sh =="
+
+OUT=$(bash scripts/registry_history.sh 2>&1 || true)
 assert_grep "no network rejected"     "--network required" "$OUT"
 
-OUT=$(bash scripts/deploy_registry.sh --network bogus 2>&1 || true)
+OUT=$(bash scripts/registry_history.sh --network mainnet --format xml 2>&1 || true)
+assert_grep "bad format rejected"     "must be json or txt" "$OUT"
+
+OUT=$(bash scripts/registry_history.sh --network bogus 2>&1 || true)
 assert_grep "bad network rejected"    "unknown network" "$OUT"
 
 # ============================================================================
@@ -58,26 +94,25 @@ else
   fail "SKILL.md name does not end with alphanumeric"
 fi
 
-# Capability Index MUST be cast-only (no bash pipes, no 'scripts/' references).
-# grep across the whole file (one line could have `cast` and another could have
-# `isClaimed`, since the URL might break the line).
-if grep -q 'cast call' SKILL.md && grep -q 'isClaimed' SKILL.md; then
-  ok "SKILL.md has cast-only isClaimed invocation"
+# SKILL.md must NOT have SETUP.md
+if [ ! -f SETUP.md ]; then
+  ok "no SETUP.md (Anvita validator rejects it)"
 else
-  fail "SKILL.md missing cast-only isClaimed"
+  fail "SETUP.md exists (rejected by Anvita Flow upload validator)"
 fi
 
-if grep -q 'cast send' SKILL.md && grep -q 'register(string,string)' SKILL.md; then
-  ok "SKILL.md has cast-only register invocation"
+# SKILL.md must NOT mention on-chain registry contract
+if grep -qE 'SymbolRegistry' SKILL.md; then
+  fail "SKILL.md still references the on-chain SymbolRegistry contract"
 else
-  fail "SKILL.md missing cast-only register"
+  ok "SKILL.md no longer references on-chain registry"
 fi
 
-# SKILL.md must NOT reference the removed bash scanner
-if grep -qE 'scripts/check\.sh|scripts/scan_symbol\.sh' SKILL.md; then
-  fail "SKILL.md still references removed bash scanner"
+# SKILL.md MUST mention the off-chain scanner (the actual value)
+if grep -qE 'check\.sh|off-chain scanner|ERC-20' SKILL.md; then
+  ok "SKILL.md mentions the off-chain scanner"
 else
-  ok "SKILL.md no longer references removed bash scanner"
+  fail "SKILL.md missing off-chain scanner description"
 fi
 
 # ============================================================================
@@ -88,9 +123,7 @@ echo "== README.md / references/ =="
 
 [ -s README.md ] && ok "README.md exists and is non-empty" || fail "README.md missing"
 
-for f in references/registry.md references/methodology.md; do
-  [ -s "$f" ] && ok "$f non-empty" || fail "$f missing"
-done
+[ -s references/methodology.md ] && ok "references/methodology.md non-empty" || fail "references/methodology.md missing"
 
 # ============================================================================
 # Network config validation
@@ -103,53 +136,51 @@ import json, sys
 d = json.load(open('assets/networks.json'))
 assert 'networks' in d, 'missing networks key'
 assert d.get('defaultNetwork'), 'missing defaultNetwork'
-mains = [n for n in d['networks'] if n.get('name') == 'mainnet']
-if not mains: sys.exit('no mainnet network entry')
-sr = mains[0].get('contracts', {}).get('SymbolRegistry')
-if not sr or not sr.startswith('0x') or len(sr) != 42:
-  sys.exit(f'mainnet SymbolRegistry not a valid 0x address: {sr!r}')
+names = [n['name'] for n in d['networks']]
+assert 'mainnet' in names, 'no mainnet entry'
+assert 'atlantic-testnet' in names, 'no testnet entry'
+for n in d['networks']:
+  assert n.get('rpcUrl'), f'{n[\"name\"]} missing rpcUrl'
+  assert n.get('chainId'), f'{n[\"name\"]} missing chainId'
+  assert 'contracts' not in n, f'{n[\"name\"]} has stale contracts field'
 " 2>/dev/null; then
-  ok "valid JSON, has defaultNetwork + mainnet SymbolRegistry (0x + 42 chars)"
+  ok "valid JSON, has mainnet + testnet, no stale contracts field"
 else
-  fail "networks.json structure invalid or missing mainnet SymbolRegistry"
+  fail "networks.json structure invalid or has stale contracts field"
 fi
 
 # ============================================================================
-# Solidity contract -- must compile cleanly via forge build
+# No on-chain artifacts
 # ============================================================================
 echo ""
-echo "== SymbolRegistry.sol =="
+echo "== No on-chain artifacts (PSCD is index-only) =="
 
-[ -s assets/contracts/SymbolRegistry.sol ] && ok "contract source present" || fail "contract source missing"
-
-if command -v forge >/dev/null 2>&1; then
-  if forge build --silent 2>/dev/null; then
-    ok "forge build succeeds"
-    if [ -f out/SymbolRegistry.sol/SymbolRegistry.json ]; then
-      ok "SymbolRegistry.json artifact present"
-    else
-      fail "SymbolRegistry.json artifact missing after build"
-    fi
-  else
-    fail "forge build failed"
-  fi
-else
-  note "forge not installed — skipping build check"
-fi
-
-# ============================================================================
-# No stragglers from the old bash-skill era
-# ============================================================================
-echo ""
-echo "== Removed bash scripts (should not exist) =="
-
-for removed in scripts/check.sh scripts/query_registry.sh scripts/register_symbol.sh scripts/release_symbol.sh scripts/registry_history.sh scripts/_registry_history_parse.py SETUP.md; do
-  if [ -e "$removed" ]; then
-    fail "$removed still exists (should be removed for cast-only flow)"
-  else
+for removed in assets/contracts scripts/deploy_registry.sh references/registry.md tests/SymbolRegistry.t.sol; do
+  if [ ! -e "$removed" ]; then
     ok "$removed removed"
+  else
+    fail "$removed still exists (PSCD is index-only, no on-chain registry)"
   fi
 done
+
+# ============================================================================
+# python3 / required binaries
+# ============================================================================
+echo ""
+echo "== Required binaries =="
+
+if command -v python3 >/dev/null 2>&1; then
+  ok "python3 available: $(python3 --version 2>&1)"
+else
+  fail "python3 not found (required by scripts/check.sh and registry_history.sh)"
+fi
+
+# bash is required (we're running inside it)
+ok "bash $(bash --version | head -1 | awk '{print $4}') (running)"
+
+# curl / cast are nice-to-have, not required for offline smoke
+note "scripts/check.sh needs cast + curl + python3 at runtime; the Anvita Flow"
+note "hosted runtime pre-installs all three."
 
 # ============================================================================
 echo ""

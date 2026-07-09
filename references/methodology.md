@@ -1,6 +1,6 @@
 # Detection Methodology
 
-This document explains how the Pharos Symbol Collision Detector (PSCD) reasons about symbol collisions, what guarantees the on-chain registry provides, and where its scope ends.
+This document explains how the Pharos Symbol Collision Detector (PSCD) reasons about ERC-20 symbol collisions, what guarantees it provides, and where its scope ends.
 
 ## What PSCD protects against
 
@@ -8,36 +8,27 @@ PSCD is a **pre-launch, name-collision detector** for ERC-20 token symbols on Ph
 
 > Two teams independently choose the same ticker symbol (e.g. "USDC") and deploy ERC-20 contracts on Pharos. End-users cannot tell which is the "real" one. Wallets, explorers, and DEXs all show the symbol legibly, so a malicious deployer can squat an existing brand.
 
-PSCD provides a **voluntary, on-chain, timestamped marker** of which team first laid claim to a given symbol. The registry records:
+PSCD walks the Pharos public RPC, finds every ERC-20 currently deployed with the candidate symbol, and surfaces a structured collision report so the developer can pick a different symbol before launching.
 
-- which address holds the claim
-- when the claim was filed (Unix timestamp + block number)
-- how much deposit the claimant locked
-- a project URI for the claimant's project
-
-The deposit is the anti-spam mechanism. It is large enough to make bulk squatting uneconomic but small enough to be returned in full when a legitimate project releases the symbol after a re-brand or pivot.
-
-## What PSCD does not protect against
+## What PSCD does NOT protect against
 
 **Important scope boundaries the agent must communicate clearly:**
 
 ### 1. PSCD cannot prevent ERC-20 deployment with a conflicting symbol
 
-Any developer can deploy an ERC-20 contract on Pharos using any ticker they choose — including one already claimed on the registry. The registry is a **visibility layer**, not a deployment gate. Two ERC-20s with the same symbol can exist on Pharos; PSCD only tells you that someone has a registered claim.
+Any developer can deploy an ERC-20 contract on Pharos using any ticker they choose — including one already in use. PSCD is a **visibility layer**, not a deployment gate. Two ERC-20s with the same symbol can exist on Pharos; PSCD only tells you whether anyone else has already claimed the ticker.
 
 The agent should always phrase results as:
 
-> "`SKP` already has an on-chain claim on the Pharos SymbolRegistry. **This does not prevent you from deploying an ERC-20 with that ticker**, but the existing claimant will be publicly visible to anyone who checks."
+> "`USDC` is already in use on Pharos Pacific mainnet. **This does not prevent you from deploying an ERC-20 with that ticker**, but the existing contract will be publicly visible to anyone who checks before interacting with yours."
 
-### 2. PSCD does not scan all existing ERC-20s off-chain
+### 2. PSCD only sees tokens that follow the standard ERC-20 interface
 
-This Skill version is scoped to **on-chain registry operations only**. It does NOT enumerate ERC-20 contracts on Pharos, parse their `name()`/`symbol()`, and surface every existing deployment of, say, "USDC". For off-chain scanning of historical deployments, use a separate indexer or block explorer.
-
-If the user needs an exhaustive chain scan, **refer them to that other tool, do not attempt it from PSCD.**
+Tokens that don't implement `symbol()`, or that panic on `symbol()`, or that have a non-standard symbol encoding, are skipped. This is rare but possible — for example, tokens that hide their symbol until after a `reveal()` call.
 
 ### 3. No ERC-721 / ERC-1155 NFT collection support
 
-The contract reserves ERC-20 ticker space. NFT collections can use any name they like and are out of scope.
+PSCD only walks ERC-20 `Transfer` events. NFT collections use a different event signature (`Transfer` is shared but with indexed token IDs, not values) and are out of scope. The agent should not use PSCD for NFT name checks.
 
 ### 4. Symbol normalization is intentional and minimal
 
@@ -52,89 +43,126 @@ That's it. Specifically **not done**:
 - No dot-tolerance (so `USDC.e` is a different ticker than `USDC`).
 - No zero-width-stripping, no emoji removal, no grapheme clustering.
 
-The intent is to handle obvious typo variations (`skp` vs `SKP`) while still treating visually-distinct variants as separate symbols. If the user needs stricter normalization, they can submit a contract improvement proposal.
+The intent is to handle obvious typo variations (`usdc` vs `USDC`) while still treating visually-distinct variants as separate symbols.
 
-## Operational flow for the agent
+## The `check.sh` algorithm
 
-When a user asks "is `SYMBOL` safe to launch on Pharos?", the agent should:
+### Inputs
 
-1. **Confirm the network.** Pacific mainnet (`https://rpc.pharos.xyz`) or Atlantic testnet (`https://atlantic.dplabs-internal.com`).
-2. **Run the `isClaimed` cast call:**
-   ```
-   cast call 0x6A9Eb713a8055d6ee46aD01641021255f62E6190 "isClaimed(string)(bool)" "SYMBOL" --rpc-url <RPC>
-   ```
-3. **If `false`:** respond that the symbol is currently unclaimed; advise the user can proceed to register.
-4. **If `true`:** call `getClaim` for the full record:
-   ```
-   cast call 0x6A9Eb713a8055d6ee46aD01641021255f62E6190 "getClaim(string)((address,uint256,uint64,uint64,string,bool))" "SYMBOL" --rpc-url <RPC>
-   ```
-   and surface the claimer, deposit, timestamp, and projectURI. **Never** represent the existing claim as a "block" — it is a public marker only.
-5. **For registering:** run pre-flight checks (private key, balance, network confirmation), then issue the `register(string, string)` `cast send` with `--value 0.001ether`.
-6. **For releasing:** verify the calling wallet is the original claimer, then issue the `release(string)` `cast send`.
+- `SYMBOL` — the candidate ticker (required, first positional)
+- `--network mainnet|testnet` — default: `mainnet`
+- `--max-blocks N` — scan only the last N blocks
+- `--from-block N` -- `--to-block N` — explicit block range
+- `--step N` — RPC batch size (default 1000, max 1000)
+- `--workers N` — parallel `eth_call` workers (default 6)
+- `--format md|json|txt` — output format (default `md`)
+- `--demo` — convenience preset: `USDC` on a small range
 
-## How claims are recorded
+### Step 1: Resolve block range
 
-The contract uses a `mapping(string => Claim) claims;` keyed by the **normalized** symbol. Each `Claim` struct stores:
-
-```solidity
-struct Claim {
-    address claimer;
-    uint256 deposit;
-    uint64 timestamp;
-    uint64 blockNumber;
-    string projectURI;
-    bool active;
-}
+```bash
+# Default: 0 to latest
+if [ --max-blocks ]: to_block = latest, from_block = latest - N
+if [ --from-block --to-block ]: use them directly
 ```
 
-`register()` creates a new `Claim` with `active = true` and emits `SymbolRegistered(symbol, claimer, deposit, projectURI, timestamp, blockNumber)`.
+### Step 2: Fetch `Transfer(from=0x0,...)` events
 
-`release()` deletes the `Claim` (resets all fields) and emits `SymbolReleased(symbol, claimer, refund)`.
+```bash
+# JSON-RPC over HTTPS
+curl -X POST $RPC \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc":"2.0",
+    "id":1,
+    "method":"eth_getLogs",
+    "params":[{
+      "fromBlock":"0x...",
+      "toBlock":"0x...",
+      "topics":[
+        "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
+        "0x0000000000000000000000000000000000000000000000000000000000000000"
+      ]
+    }]
+  }'
+```
 
-The 0.001 PHRS/PROS deposit is held in the contract's `totalHeld` accumulator. The owner can `emergencyWithdrawal()` to sweep all held funds, but **only while the contract is paused** — preventing an owner from unilaterally seizing unchallenged claims during normal operation.
+This emits a `Transfer` from the zero-address whenever an ERC-20 mints the initial supply. This is the standard index used by Etherscan / Pharoscan for their "new tokens" list.
 
-## How disputes are intended to work
+**RPC limit:** Pharos's public RPC rejects `eth_getLogs` requests spanning more than 1,000 blocks. The script auto-batches the range into 1,000-block windows and parallelizes 4 ways via `xargs -P 4`.
 
-PSCD is **not** a dispute-resolution system. It is a first-to-file marker with an anti-spam deposit. The intended workflow is:
+### Step 3: Extract token addresses
 
-1. Team A deploys ERC-20 with `USDC` and registers the claim.
-2. Team B arrives and wants to deploy `USDC` too.
-3. Team B sees the existing claim and (one of):
-   - **Picks a different symbol** (recommended).
-   - **Contacts the original claimer** through the projectURI and negotiates.
-   - **Deploys anyway**, knowing the existing claim is publicly visible.
+The `to` field of each `Transfer(from=0x0,...)` event is the new token's address. Deduplicate.
 
-PSCD does not adjudicate. It makes the situation legible.
+### Step 4: For each candidate, call `symbol()`
 
-## Why on-chain, not off-chain
+```bash
+cast call $ADDR "symbol()(string)" --rpc-url $RPC
+# or, with curl:
+curl -X POST $RPC -d '{"jsonrpc":"2.0","method":"eth_call",
+       "params":[{"to":"0x...","data":"0x95d89b41"}, "latest"]}' 
+```
 
-Off-chain symbol registries fail because:
+`0x95d89b41` is the function selector for `symbol()`.
 
-- They have no trustless timestamp.
-- They can be retroactively edited by the registry operator.
-- They don't follow the chain the token lives on.
+If the call returns:
+- a `string` that matches the query (after normalization) → **CANDIDATE** for collision
+- revert / empty / non-string → skip
 
-By making the registry itself a contract, PSCD inherits:
+### Step 5: Enrich the match
 
-- Pharos consensus for the timestamp + ordering.
-- An auditable, immutable history of all claims and releases.
-- A direct incentive alignment: the 0.001 deposit is held by the contract, refundable on good-faith release, and only swept by the owner under explicit pause conditions.
+For each candidate, also call:
+- `name()(string)` — `0x06fdde03`
+- `decimals()(uint8)` — `0x313ce567`
+- `totalSupply()(uint256)` — `0x18160ddd`
+
+These enrich the report and help the user distinguish the "real" token from imposters.
+
+### Step 6: Emit the verdict
+
+```
+verdict = len(collisions) > 0 ? "COLLISION" : "CLEAR"
+```
+
+Output is rendered in the chosen format (md/json/txt). For COLLISION, the report includes a per-token table with explorer links and a recommendation to pick a different symbol.
+
+## Performance
+
+| Block range | Approx time | RPC calls |
+|---:|---:|---:|
+| 1,000 | <1s | 1 batch + N `eth_call`s |
+| 10,000 | ~1s | 10 batches + N `eth_call`s |
+| 50,000 | ~5s | 50 batches + N `eth_call`s |
+| 100,000 | ~10s | 100 batches + N `eth_call`s |
+| 1,000,000 | ~2min | 1000 batches + N `eth_call`s |
+| Full chain (~12M blocks) | ~30min | 12000 batches + N `eth_call`s |
+
+`N` is the number of `Transfer(from=0x0,...)` events in the range. For Pharos Pacific mainnet, this is currently ~2,500-3,000 per 100,000 blocks.
+
+## The `registry_history.sh` algorithm
+
+Same `Transfer(from=0x0,...)` index, but emits **every** ticker seen in the range, not just the matching one. Output is a per-ticker count + first-seen block + a sample address. Useful for "show me what launched recently on Pharos."
+
+**Use case:** "Has anyone launched a token called `ZKSYNC` on Pharos in the last 30 days?"
+
+```bash
+bash scripts/registry_history.sh --network mainnet --since-block 11700000 | head -50
+```
 
 ## Security model
 
-| Threat | Mitigation |
+| Threat | PSCD mitigation |
 |---|---|
-| Sybil squatting | 0.001 PHRS/PROS per symbol makes bulk squatting costly |
-| Owner theft | `emergencyWithdrawal()` requires paused state; emits `EmergencyWithdrawal` event |
-| Front-running an existing claim | Symbols are stored by their normalized form; first-to-register wins |
-| Silent denial of refund | `release()` always transfers the full deposit; `TransferFailed()` is a revert reason |
-| Past-tense impersonation | Claims are first-to-file; timestamp is part of the stored record |
-
-The owner (`0xCC06503955C5808bCc6e285A868925cB0A0A8AC0`) can pause and sweep, but only as a global recovery — there's no `setClaimer(address)` or `forceRelease(symbol)` that could be used to evict one specific claim while leaving others intact.
+| Deploying a token with an in-use symbol | Pre-launch visibility report; recommendation to pick a different symbol |
+| Hidden symbol (e.g. `symbol()` returns empty initially) | Out of scope — not a security issue, just a deployment pattern |
+| Front-running an existing token's brand | No protection — once you deploy, you're on-chain |
+| Unicode homoglyph squatting (`UЅDC` vs `USDC`) | Not detected — explicit limitation |
 
 ## Future work (not in this Skill version)
 
 - ERC-721 collection name registry
-- Off-chain chain scanner (warm storage of all `name()`/`symbol()` mappings across Pharos)
-- Multi-chain registry federation (PSCD + Polygon + Ethereum + Base)
-- Deployed dispute-resolution mechanism (independent arbiter contract)
+- Multi-chain symbol scanner (Polygon, Base, Ethereum) via cross-chain indexers
+- Deeper normalization (Unicode NFKC, dot-tolerance, homoglyph detection)
+- An on-chain `SymbolRegistry` contract for first-mover claims with refundable deposits
+- Cross-ticker fuzzy matching (Levenshtein, OCR-confusable)
